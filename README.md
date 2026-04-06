@@ -2,6 +2,8 @@
 
 Minimal browser-based Three.js viewer for `.glb` files.
 
+![GLB Viewer preview](./docs/preview.png)
+
 ## Links
 
 - Repository: `https://github.com/fluenttsol/glb-viewer`

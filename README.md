@@ -2,6 +2,11 @@
 
 Minimal browser-based Three.js viewer for `.glb` files.
 
+## Links
+
+- Repository: `https://github.com/fluenttsol/glb-viewer`
+- Live: `https://glb-viewer-ebon.vercel.app`
+
 ## Run
 
 ```bash

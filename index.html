@@ -1,0 +1,602 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>GLB Viewer</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #0b0d10;
+        --sidebar-bg: #0f1116;
+        --border: rgba(255, 255, 255, 0.08);
+        --text: #f3f5f7;
+        --muted: rgba(243, 245, 247, 0.5);
+        --accent: #7aa2ff;
+        --danger: #ff8f8f;
+      }
+      * { box-sizing: border-box; margin: 0; padding: 0; }
+      html, body {
+        width: 100%; height: 100%; overflow: hidden;
+        background: var(--bg);
+        color: var(--text);
+        font-family: Inter, ui-sans-serif, system-ui, -apple-system, sans-serif;
+        font-size: 13px;
+      }
+
+      /* ── Layout ── */
+      #app { display: flex; width: 100%; height: 100%; }
+
+      #sidebar {
+        width: 260px;
+        flex-shrink: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 0;
+        overflow-y: auto;
+        background: var(--sidebar-bg);
+        border-right: 1px solid var(--border);
+      }
+
+      #viewport {
+        flex: 1;
+        min-width: 0;
+        position: relative;
+        overflow: hidden;
+        background: var(--bg);
+      }
+
+      #inspector {
+        width: 320px;
+        flex-shrink: 0;
+        display: flex;
+        flex-direction: column;
+        overflow-y: auto;
+        background: #10131a;
+        border-left: 1px solid var(--border);
+      }
+
+      #canvas { width: 100%; height: 100%; display: block; }
+
+      /* ── Sidebar sections ── */
+      .sb-section {
+        padding: 16px;
+        border-bottom: 1px solid var(--border);
+      }
+      .sb-title {
+        font-size: 14px;
+        font-weight: 700;
+        margin-bottom: 2px;
+      }
+      .sb-sub {
+        font-size: 11px;
+        color: var(--muted);
+      }
+
+      /* File buttons */
+      .file-btns { display: grid; gap: 8px; margin-top: 12px; }
+      .btn {
+        display: block;
+        text-align: center;
+        appearance: none;
+        border: 1px solid var(--border);
+        background: rgba(255,255,255,0.05);
+        color: var(--text);
+        border-radius: 8px;
+        padding: 9px 14px;
+        cursor: pointer;
+        font-size: 13px;
+        font-family: inherit;
+        transition: background 120ms;
+        text-decoration: none;
+      }
+      .btn:hover { background: rgba(255,255,255,0.1); }
+      .btn.primary { background: linear-gradient(90deg, #5d7dff, #9c72ff); border: none; }
+      .btn.primary:hover { opacity: 0.9; }
+      .btn:disabled {
+        opacity: 0.45;
+        cursor: not-allowed;
+        pointer-events: none;
+      }
+
+      .file-chip {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 8px;
+        margin-top: 8px;
+        padding: 8px 10px;
+        border-radius: 8px;
+        background: rgba(255,255,255,0.03);
+        border: 1px solid var(--border);
+        font-size: 11px;
+      }
+      .file-chip span:last-child {
+        color: var(--muted);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        max-width: 140px;
+        direction: rtl;
+        text-align: right;
+      }
+
+      /* Progress + status */
+      .progress {
+        width: 100%;
+        height: 4px;
+        appearance: none;
+        margin-bottom: 6px;
+        border-radius: 999px;
+        overflow: hidden;
+      }
+      .progress::-webkit-progress-bar { background: rgba(255,255,255,0.06); }
+      .progress::-webkit-progress-value { background: linear-gradient(90deg, #6ea8fe, #9a7cff); }
+      .status { color: var(--muted); font-size: 12px; }
+      .error { color: var(--danger) !important; }
+
+      /* Controls */
+      .controls { display: grid; gap: 14px; padding: 16px; }
+      .toggle {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        cursor: pointer;
+        user-select: none;
+      }
+      .control { display: grid; gap: 6px; }
+      .control-stack { display: grid; gap: 10px; }
+      .control-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+      }
+      .control-row .lbl { color: var(--muted); }
+      .control-row .val { font-variant-numeric: tabular-nums; }
+      .control-hint {
+        padding: 3px 7px;
+        border-radius: 999px;
+        border: 1px solid rgba(255,255,255,0.08);
+        background: rgba(255,255,255,0.04);
+        color: var(--muted);
+        font-size: 10px;
+        letter-spacing: 0.04em;
+      }
+      .group-label {
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        color: var(--muted);
+      }
+      .animation-control {
+        padding: 12px;
+        border-radius: 12px;
+        border: 1px solid rgba(255,255,255,0.08);
+        background: linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.02));
+      }
+      .animation-control[data-state="ready"] {
+        border-color: rgba(122,162,255,0.18);
+        background: linear-gradient(180deg, rgba(110,168,254,0.08), rgba(255,255,255,0.02));
+        box-shadow: inset 0 1px 0 rgba(255,255,255,0.04);
+      }
+      .select-wrap {
+        position: relative;
+        display: block;
+      }
+      .select-icon {
+        position: absolute;
+        top: 50%;
+        right: 12px;
+        transform: translateY(-50%);
+        color: rgba(243, 245, 247, 0.78);
+        font-size: 14px;
+        pointer-events: none;
+      }
+      select {
+        width: 100%;
+        appearance: none;
+        border: 1px solid rgba(255,255,255,0.12);
+        background: linear-gradient(180deg, rgba(255,255,255,0.08), rgba(255,255,255,0.04));
+        color: var(--text);
+        border-radius: 10px;
+        padding: 11px 40px 11px 12px;
+        font-size: 13px;
+        font-family: inherit;
+        transition: border-color 140ms ease, background 140ms ease, box-shadow 140ms ease, transform 140ms ease;
+        cursor: pointer;
+      }
+      select:hover:not(:disabled) {
+        border-color: rgba(122,162,255,0.28);
+        background: linear-gradient(180deg, rgba(255,255,255,0.11), rgba(255,255,255,0.05));
+      }
+      select:focus {
+        outline: none;
+        border-color: rgba(122,162,255,0.55);
+        box-shadow: 0 0 0 3px rgba(122,162,255,0.14);
+      }
+      select:disabled {
+        cursor: not-allowed;
+        opacity: 0.72;
+      }
+      .select-wrap:hover .select-icon,
+      .select-wrap:focus-within .select-icon {
+        color: #cfe0ff;
+      }
+      .control-sub {
+        color: var(--muted);
+        font-size: 11px;
+        line-height: 1.5;
+      }
+      input[type="range"] {
+        width: 100%;
+        accent-color: var(--accent);
+      }
+
+      .btn-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+      .btn-stack { display: grid; gap: 8px; }
+
+      .inspector-head {
+        padding: 18px 16px 12px;
+        border-bottom: 1px solid var(--border);
+      }
+      .inspector-title {
+        font-size: 14px;
+        font-weight: 700;
+        margin-bottom: 4px;
+      }
+      .inspector-sub {
+        color: var(--muted);
+        font-size: 11px;
+      }
+      .inspector-body {
+        display: grid;
+        gap: 14px;
+        padding: 16px;
+      }
+      .summary-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 8px;
+      }
+      .summary-card {
+        padding: 10px;
+        border-radius: 10px;
+        border: 1px solid var(--border);
+        background: rgba(255,255,255,0.03);
+      }
+      .summary-label {
+        color: var(--muted);
+        font-size: 10px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        margin-bottom: 4px;
+      }
+      .summary-value {
+        font-size: 16px;
+        font-weight: 700;
+        font-variant-numeric: tabular-nums;
+      }
+      .inspector-empty {
+        padding: 14px;
+        border-radius: 12px;
+        border: 1px dashed rgba(255,255,255,0.14);
+        background: rgba(255,255,255,0.02);
+        color: var(--muted);
+        line-height: 1.6;
+      }
+      .material-list {
+        display: grid;
+        gap: 12px;
+      }
+      .material-card {
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        background: rgba(255,255,255,0.025);
+        overflow: hidden;
+      }
+      .material-head {
+        padding: 12px 12px 10px;
+        border-bottom: 1px solid rgba(255,255,255,0.06);
+      }
+      .material-title {
+        font-size: 13px;
+        font-weight: 700;
+        margin-bottom: 4px;
+      }
+      .material-meta {
+        color: var(--muted);
+        font-size: 11px;
+        line-height: 1.5;
+      }
+      .texture-list {
+        display: grid;
+        gap: 10px;
+        padding: 12px;
+      }
+      .texture-item {
+        display: grid;
+        grid-template-columns: 72px 1fr;
+        gap: 10px;
+        align-items: start;
+      }
+      .texture-thumb {
+        width: 72px;
+        height: 72px;
+        border-radius: 10px;
+        border: 1px solid rgba(255,255,255,0.08);
+        background: linear-gradient(135deg, rgba(255,255,255,0.06), rgba(255,255,255,0.02));
+        overflow: hidden;
+      }
+      .texture-thumb canvas,
+      .texture-thumb img {
+        display: block;
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+      }
+      .texture-thumb-fallback {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 8px;
+        text-align: center;
+        color: var(--muted);
+        font-size: 10px;
+        line-height: 1.4;
+      }
+      .texture-slot {
+        font-size: 12px;
+        font-weight: 700;
+        margin-bottom: 3px;
+      }
+      .texture-name {
+        color: var(--text);
+        font-size: 12px;
+        margin-bottom: 4px;
+        word-break: break-word;
+      }
+      .texture-body {
+        min-width: 0;
+      }
+      .texture-meta {
+        color: var(--muted);
+        font-size: 11px;
+        line-height: 1.5;
+      }
+      .texture-actions {
+        display: flex;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 6px;
+        margin-top: 8px;
+      }
+      .texture-action {
+        appearance: none;
+        border: 1px solid rgba(255,255,255,0.1);
+        background: rgba(255,255,255,0.06);
+        color: var(--text);
+        border-radius: 8px;
+        padding: 6px 10px;
+        cursor: pointer;
+        font-size: 11px;
+        font-family: inherit;
+        line-height: 1;
+      }
+      .texture-action:hover {
+        background: rgba(255,255,255,0.1);
+      }
+      .texture-action.subtle {
+        color: var(--muted);
+      }
+      .texture-action:disabled {
+        opacity: 0.4;
+        cursor: not-allowed;
+      }
+      .texture-state {
+        color: var(--muted);
+        font-size: 10px;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+      }
+      .pill-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        margin-top: 6px;
+      }
+      .pill {
+        padding: 4px 7px;
+        border-radius: 999px;
+        background: rgba(255,255,255,0.05);
+        border: 1px solid rgba(255,255,255,0.08);
+        color: var(--muted);
+        font-size: 10px;
+      }
+
+      /* ── Viewport overlays ── */
+      .dropzone {
+        position: absolute;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: rgba(5, 7, 10, 0.5);
+        backdrop-filter: blur(8px);
+        z-index: 8;
+        transition: opacity 160ms ease;
+        pointer-events: auto;
+      }
+      .dropzone.hidden { opacity: 0; pointer-events: none; }
+      .dropzone.dragover { background: rgba(60, 88, 148, 0.22); }
+      .drop-inner { text-align: center; }
+      .drop-title { font-size: 18px; font-weight: 700; margin-bottom: 8px; }
+      .drop-desc { color: var(--muted); font-size: 13px; line-height: 1.6; }
+      .drop-border {
+        border: 1.5px dashed rgba(255,255,255,0.2);
+        border-radius: 20px;
+        padding: 48px 40px;
+        transition: border-color 160ms;
+      }
+      .dragover .drop-border { border-color: rgba(122,162,255,0.8); }
+
+      .hint {
+        position: absolute;
+        right: 12px;
+        bottom: 12px;
+        padding: 8px 12px;
+        border-radius: 10px;
+        border: 1px solid var(--border);
+        background: rgba(10,12,16,0.6);
+        backdrop-filter: blur(10px);
+        color: var(--muted);
+        font-size: 11px;
+        z-index: 10;
+      }
+
+      input[type="file"] { display: none; }
+    </style>
+  </head>
+  <body>
+    <div id="app">
+
+      <!-- ── Left sidebar ── -->
+      <aside id="sidebar">
+        <div class="sb-section">
+          <div class="sb-title">GLB Viewer</div>
+          <div class="sb-sub">Three.js · GLTFLoader · RGBELoader</div>
+        </div>
+
+        <div class="sb-section">
+          <div class="file-btns">
+            <label for="modelInput" class="btn primary">Choose GLB</label>
+            <label for="hdrInput" class="btn">Choose HDRI</label>
+            <a class="btn" href="./assets/260406_daymo_motion.glb" download="260406_daymo_motion.glb">Download default GLB</a>
+          </div>
+          <div class="file-chip">
+            <span>Model</span>
+            <span id="modelFileName">assets/260406_daymo_motion.glb</span>
+          </div>
+          <div class="file-chip">
+            <span>HDRI</span>
+            <span id="hdrFileName">Procedural studio</span>
+          </div>
+        </div>
+
+        <div class="sb-section">
+          <progress id="progress" class="progress" max="100" value="0"></progress>
+          <div id="status" class="status">Preparing scene…</div>
+        </div>
+
+        <div class="controls">
+          <label class="toggle">
+            <input id="bgToggle" type="checkbox" />
+            <span>Show environment background</span>
+          </label>
+          <label class="toggle">
+            <input id="shadowToggle" type="checkbox" />
+            <span>Shadows</span>
+          </label>
+          <label class="toggle">
+            <input id="autoRotateToggle" type="checkbox" />
+            <span>Auto rotate</span>
+          </label>
+
+          <div id="animationControl" class="control-stack animation-control" data-state="empty">
+            <div class="control-row">
+              <div class="group-label">Animation clip</div>
+              <div id="animationHint" class="control-hint">No clips</div>
+            </div>
+            <label class="select-wrap" for="animationSelect">
+              <select id="animationSelect" disabled>
+                <option>No animations</option>
+              </select>
+              <span class="select-icon" aria-hidden="true">⌄</span>
+            </label>
+            <div id="animationSub" class="control-sub">
+              Load an animated GLB to choose a clip here.
+            </div>
+          </div>
+
+          <div class="btn-stack">
+            <button id="toggleAnimationBtn" class="btn" type="button" disabled>No animation</button>
+            <div class="btn-row">
+              <button id="resetCameraBtn" class="btn" type="button">Reset camera</button>
+              <button id="clearModelBtn" class="btn" type="button">Clear model</button>
+            </div>
+          </div>
+        </div>
+      </aside>
+
+      <!-- ── Viewport ── -->
+      <div id="viewport">
+        <canvas id="canvas"></canvas>
+
+        <div id="dropzone" class="dropzone hidden">
+          <div class="drop-inner">
+            <div class="drop-border">
+              <div class="drop-title">Drop a GLB here</div>
+              <div class="drop-desc">
+                .glb 파일을 드래그하거나<br />왼쪽 패널에서 파일을 선택하세요.
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="hint">Preset lights · Orbit camera · Drop GLB / HDR / EXR</div>
+      </div>
+
+      <aside id="inspector">
+        <div class="inspector-head">
+          <div class="inspector-title">Texture Inspector</div>
+          <div class="inspector-sub">Base Color can be replaced and restored per material.</div>
+        </div>
+
+        <div class="inspector-body">
+          <div id="inspectorSummary" class="summary-grid">
+            <div class="summary-card">
+              <div class="summary-label">Meshes</div>
+              <div id="summaryMeshes" class="summary-value">0</div>
+            </div>
+            <div class="summary-card">
+              <div class="summary-label">Materials</div>
+              <div id="summaryMaterials" class="summary-value">0</div>
+            </div>
+            <div class="summary-card">
+              <div class="summary-label">Textures</div>
+              <div id="summaryTextures" class="summary-value">0</div>
+            </div>
+            <div class="summary-card">
+              <div class="summary-label">Vertices</div>
+              <div id="summaryVertices" class="summary-value">0</div>
+            </div>
+            <div class="summary-card">
+              <div class="summary-label">File Size</div>
+              <div id="summaryFileSize" class="summary-value">-</div>
+            </div>
+          </div>
+
+          <div id="inspectorEmpty" class="inspector-empty">
+            GLB를 로드하면 여기서 머티리얼별 텍스처를 확인할 수 있습니다.
+          </div>
+
+          <div id="textureInspectorList" class="material-list"></div>
+        </div>
+      </aside>
+
+    </div>
+
+    <input id="modelInput" type="file" accept=".glb,model/gltf-binary" />
+    <input id="hdrInput" type="file" accept=".hdr,.exr" />
+
+    <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.164.1/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.164.1/examples/jsm/"
+      }
+    }
+    </script>
+    <script type="module" src="./viewer.js?v=20260406-3"></script>
+  </body>
+</html>

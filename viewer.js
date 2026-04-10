@@ -9,7 +9,7 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
 
-const DEFAULT_MODEL_URL = './assets/260406_daymo_motion.glb?v=20260406';
+const DEFAULT_MODEL_URL = './assets/260408_daymo_motion.glb?v=20260408';
 const FLAT_BACKGROUND = new THREE.Color(0x0b0d10);
 const DEFAULT_CAMERA_POSITION = new THREE.Vector3(1.8, 2, 3.2);
 const LIGHTING_PRESETS = {
@@ -102,6 +102,17 @@ const TEXTURE_SLOTS = [
 ];
 const REPLACEABLE_TEXTURE_SLOTS = new Set(['map', 'emissiveMap']);
 const TEXTURE_LABELS = new Map(TEXTURE_SLOTS);
+const FACE_SPRITE_TARGET_NAMES = new Set(['face_1', 'face_2', 'face_3']);
+const FACE_SPRITE_DEFAULTS = Object.freeze({
+  columns: 4,
+  rows: 4,
+  frameCount: 16,
+  expressionFrame: 0,
+  blinkFrame: 4,
+  fps: 8,
+  playbackRow: 0,
+  blinkEnabled: false,
+});
 const GAMMA_SHADER = {
   uniforms: {
     tDiffuse: { value: null },
@@ -225,7 +236,269 @@ let animationActions = [];
 let animationClips = [];
 let currentAnimationIndex = -1;
 const textureOverrides = new Map();
+const spriteBindings = new Map();
 const isFileProtocol = window.location.protocol === 'file:';
+
+const getMaterialName = (material) => material?.name?.trim()?.toLowerCase() ?? '';
+
+const isFaceSpriteTarget = (material, slotKey) => slotKey === 'map' && FACE_SPRITE_TARGET_NAMES.has(getMaterialName(material));
+
+const sanitizeInteger = (value, fallback = 0) => {
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) ? parsed : fallback;
+};
+
+const sanitizeNumber = (value, fallback = 0) => {
+  const parsed = Number.parseFloat(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+};
+
+const clampSpriteFrame = (value, frameCount = 1) => {
+  const maxFrame = Math.max(1, sanitizeInteger(frameCount, 1));
+  return THREE.MathUtils.clamp(sanitizeInteger(value, 0), 0, maxFrame - 1);
+};
+
+const randomBetween = (min, max) => {
+  const safeMin = sanitizeNumber(min, 0);
+  const safeMax = Math.max(safeMin, sanitizeNumber(max, safeMin));
+  return safeMin + Math.random() * (safeMax - safeMin);
+};
+
+const scheduleNextBlink = (spriteState, now = performance.now() * 0.001) => {
+  if (!spriteState) return;
+
+  spriteState.isBlinking = false;
+  spriteState.blinkUntil = 0;
+  spriteState.nextBlinkAt = now + randomBetween(spriteState.blinkMinDelay, spriteState.blinkMaxDelay);
+};
+
+const getSpriteVisibleFrame = (spriteState) => {
+  if (!spriteState) return 0;
+  if (spriteState.isPlaying) return spriteState.activeFrame;
+  if (spriteState.blinkEnabled && spriteState.isBlinking) return spriteState.blinkFrame;
+  return spriteState.expressionFrame;
+};
+
+const normalizeSpriteState = (spriteState, texture, { now = performance.now() * 0.001 } = {}) => {
+  if (!spriteState || !texture) return;
+
+  spriteState.columns = THREE.MathUtils.clamp(sanitizeInteger(spriteState.columns, 4), 1, 16);
+  spriteState.rows = THREE.MathUtils.clamp(sanitizeInteger(spriteState.rows, 4), 1, 16);
+  spriteState.frameCount = THREE.MathUtils.clamp(
+    sanitizeInteger(spriteState.frameCount, spriteState.columns * spriteState.rows),
+    1,
+    spriteState.columns * spriteState.rows,
+  );
+  spriteState.expressionFrame = clampSpriteFrame(spriteState.expressionFrame, spriteState.frameCount);
+  spriteState.blinkFrame = clampSpriteFrame(spriteState.blinkFrame, spriteState.frameCount);
+  spriteState.activeFrame = clampSpriteFrame(spriteState.activeFrame, spriteState.frameCount);
+  spriteState.playbackRow = THREE.MathUtils.clamp(
+    sanitizeInteger(spriteState.playbackRow, 0),
+    0,
+    Math.max(0, spriteState.rows - 1),
+  );
+  spriteState.fps = THREE.MathUtils.clamp(sanitizeNumber(spriteState.fps, 8), 0.25, 60);
+  spriteState.blinkMinDelay = Math.max(0.4, sanitizeNumber(spriteState.blinkMinDelay, 2.6));
+  spriteState.blinkMaxDelay = Math.max(spriteState.blinkMinDelay, sanitizeNumber(spriteState.blinkMaxDelay, 5.2));
+  spriteState.blinkHoldDuration = THREE.MathUtils.clamp(sanitizeNumber(spriteState.blinkHoldDuration, 0.12), 0.04, 0.45);
+  spriteState.baseRepeat ??= new THREE.Vector2(1, 1);
+  spriteState.baseOffset ??= new THREE.Vector2(0, 0);
+
+  if (!spriteState.isPlaying) {
+    spriteState.activeFrame = spriteState.expressionFrame;
+    if (!spriteState.blinkEnabled) {
+      spriteState.isBlinking = false;
+    }
+  }
+
+  if (!Number.isFinite(spriteState.nextBlinkAt) || spriteState.nextBlinkAt <= 0) {
+    scheduleNextBlink(spriteState, now);
+  }
+};
+
+const applySpriteFrameToTexture = (texture, spriteState, frameIndex = getSpriteVisibleFrame(spriteState)) => {
+  if (!texture || !spriteState) return;
+
+  normalizeSpriteState(spriteState, texture);
+
+  const nextFrame = clampSpriteFrame(frameIndex, spriteState.frameCount);
+  const cellWidth = spriteState.baseRepeat.x / spriteState.columns;
+  const cellHeight = spriteState.baseRepeat.y / spriteState.rows;
+  const col = nextFrame % spriteState.columns;
+  const row = Math.floor(nextFrame / spriteState.columns);
+  const textureRow = Math.max(0, spriteState.rows - row - 1);
+  const insetU = Math.min(cellWidth * 0.002, 0.0015);
+  const insetV = Math.min(cellHeight * 0.002, 0.0015);
+
+  texture.wrapS = THREE.ClampToEdgeWrapping;
+  texture.wrapT = THREE.ClampToEdgeWrapping;
+  texture.repeat.set(Math.max(0.00001, cellWidth - insetU * 2), Math.max(0.00001, cellHeight - insetV * 2));
+  texture.offset.set(
+    spriteState.baseOffset.x + col * cellWidth + insetU,
+    spriteState.baseOffset.y + textureRow * cellHeight + insetV,
+  );
+  texture.needsUpdate = true;
+
+  if (spriteState.displayFrame !== nextFrame) {
+    spriteState.displayFrame = nextFrame;
+    spriteState.onFrameChange?.();
+  }
+};
+
+const createSpriteState = (texture, overrides = {}) => {
+  const spriteState = {
+    columns: FACE_SPRITE_DEFAULTS.columns,
+    rows: FACE_SPRITE_DEFAULTS.rows,
+    frameCount: FACE_SPRITE_DEFAULTS.frameCount,
+    expressionFrame: FACE_SPRITE_DEFAULTS.expressionFrame,
+    blinkFrame: FACE_SPRITE_DEFAULTS.blinkFrame,
+    activeFrame: FACE_SPRITE_DEFAULTS.expressionFrame,
+    displayFrame: -1,
+    fps: FACE_SPRITE_DEFAULTS.fps,
+    playbackRow: FACE_SPRITE_DEFAULTS.playbackRow,
+    playbackCursor: 0,
+    playbackAccumulator: 0,
+    isPlaying: false,
+    blinkEnabled: FACE_SPRITE_DEFAULTS.blinkEnabled,
+    isBlinking: false,
+    blinkUntil: 0,
+    nextBlinkAt: 0,
+    blinkMinDelay: 2.6,
+    blinkMaxDelay: 5.2,
+    blinkHoldDuration: 0.12,
+    baseRepeat: new THREE.Vector2(1, 1),
+    baseOffset: new THREE.Vector2(0, 0),
+    onFrameChange: null,
+    ...overrides,
+  };
+
+  normalizeSpriteState(spriteState, texture);
+  scheduleNextBlink(spriteState);
+  return spriteState;
+};
+
+const getSpritePlaybackFrames = (spriteState) => {
+  if (!spriteState) return [];
+
+  const rowIndex = THREE.MathUtils.clamp(sanitizeInteger(spriteState.playbackRow, 0), 0, spriteState.rows - 1);
+  const frames = [];
+  for (let col = 0; col < spriteState.columns; col += 1) {
+    const frame = rowIndex * spriteState.columns + col;
+    if (frame < spriteState.frameCount) {
+      frames.push(frame);
+    }
+  }
+  return frames;
+};
+
+const primeSpriteRowPlayback = (spriteState) => {
+  const frames = getSpritePlaybackFrames(spriteState);
+  if (!frames.length) return;
+
+  spriteState.playbackCursor = 0;
+  spriteState.playbackAccumulator = 0;
+  spriteState.activeFrame = frames[0];
+};
+
+const getSpriteBinding = (material, slotKey) => spriteBindings.get(getTextureOverrideKey(material, slotKey)) ?? null;
+
+const bindSpriteState = (material, slotKey, texture, spriteState) => {
+  if (!material || !slotKey || !texture || !spriteState) return null;
+
+  const key = getTextureOverrideKey(material, slotKey);
+  const existingBinding = spriteBindings.get(key);
+  if (existingBinding?.sprite) {
+    existingBinding.sprite.onFrameChange = null;
+  }
+
+  spriteBindings.set(key, { texture, sprite: spriteState });
+  applySpriteFrameToTexture(texture, spriteState);
+  return spriteState;
+};
+
+const clearSpriteBinding = (material, slotKey) => {
+  const key = getTextureOverrideKey(material, slotKey);
+  const binding = spriteBindings.get(key);
+  if (binding?.sprite) {
+    binding.sprite.onFrameChange = null;
+  }
+  spriteBindings.delete(key);
+};
+
+const clearSpriteBindings = () => {
+  spriteBindings.forEach((binding) => {
+    if (binding?.sprite) {
+      binding.sprite.onFrameChange = null;
+    }
+  });
+  spriteBindings.clear();
+};
+
+const ensureDefaultFaceSpriteState = (material, slotKey, texture) => {
+  if (!isFaceSpriteTarget(material, slotKey) || !texture) return null;
+
+  const key = getTextureOverrideKey(material, slotKey);
+  const existingBinding = spriteBindings.get(key);
+  if (existingBinding?.texture === texture && existingBinding?.sprite) {
+    return existingBinding.sprite;
+  }
+
+  const spriteState = createSpriteState(texture);
+  bindSpriteState(material, slotKey, texture, spriteState);
+  return spriteState;
+};
+
+const ensureDefaultFaceSpriteBindings = (root) => {
+  if (!root) return;
+
+  root.traverse((child) => {
+    if (!child.isMesh || !child.material) return;
+
+    const materials = Array.isArray(child.material) ? child.material : [child.material];
+    materials.forEach((material) => {
+      if (!material?.map) return;
+      ensureDefaultFaceSpriteState(material, 'map', material.map);
+    });
+  });
+};
+
+const stepSpriteAnimations = (delta) => {
+  if (!spriteBindings.size) return;
+
+  const now = performance.now() * 0.001;
+  spriteBindings.forEach((binding) => {
+    const spriteState = binding?.sprite;
+    const texture = binding?.texture;
+    if (!spriteState || !texture) return;
+
+    normalizeSpriteState(spriteState, texture, { now });
+
+    if (spriteState.isPlaying) {
+      const playbackFrames = getSpritePlaybackFrames(spriteState);
+      if (!playbackFrames.length) return;
+
+      if (!playbackFrames.includes(spriteState.activeFrame)) {
+        primeSpriteRowPlayback(spriteState);
+      }
+
+      spriteState.playbackAccumulator += delta * spriteState.fps;
+      while (spriteState.playbackAccumulator >= 1) {
+        spriteState.playbackCursor = (spriteState.playbackCursor + 1) % playbackFrames.length;
+        spriteState.activeFrame = playbackFrames[spriteState.playbackCursor];
+        spriteState.playbackAccumulator -= 1;
+      }
+    } else if (spriteState.blinkEnabled && spriteState.frameCount > 1) {
+      if (!spriteState.isBlinking && now >= spriteState.nextBlinkAt) {
+        spriteState.isBlinking = true;
+        spriteState.blinkUntil = now + spriteState.blinkHoldDuration;
+      } else if (spriteState.isBlinking && now >= spriteState.blinkUntil) {
+        scheduleNextBlink(spriteState, now);
+      }
+    }
+
+    applySpriteFrameToTexture(texture, spriteState);
+  });
+};
 
 const setStatus = (text, isError = false) => {
   statusEl.textContent = text;
@@ -267,6 +540,11 @@ const setInspectorSummary = ({ meshes = 0, materials = 0, textures = 0, vertices
 const getAnimationLabel = (clip, index) => {
   const name = clip?.name?.trim();
   return name ? name : `Animation ${index + 1}`;
+};
+
+const getDefaultAnimationIndex = (clips = []) => {
+  const tposeIndex = clips.findIndex((clip) => clip?.name?.trim()?.toLowerCase() === 'tpose');
+  return tposeIndex >= 0 ? tposeIndex : 0;
 };
 
 const syncAnimationMeta = () => {
@@ -485,6 +763,12 @@ const replaceMaterialTexture = async (material, slotKey, file) => {
     material[slotKey] = nextTexture;
     material.needsUpdate = true;
 
+    if (isFaceSpriteTarget(material, slotKey)) {
+      bindSpriteState(material, slotKey, nextTexture, createSpriteState(nextTexture));
+    } else {
+      clearSpriteBinding(material, slotKey);
+    }
+
     if (record.objectUrl) URL.revokeObjectURL(record.objectUrl);
     if (record.replacementTexture && record.replacementTexture !== record.originalTexture) {
       disposeTexture(record.replacementTexture);
@@ -514,6 +798,12 @@ const resetMaterialTexture = (material, slotKey) => {
   material[slotKey] = record.originalTexture ?? null;
   material.needsUpdate = true;
 
+  if (isFaceSpriteTarget(material, slotKey) && record.originalTexture) {
+    ensureDefaultFaceSpriteState(material, slotKey, record.originalTexture);
+  } else {
+    clearSpriteBinding(material, slotKey);
+  }
+
   if (record.objectUrl) URL.revokeObjectURL(record.objectUrl);
   if (record.replacementTexture && record.replacementTexture !== record.originalTexture) {
     disposeTexture(record.replacementTexture);
@@ -526,7 +816,40 @@ const resetMaterialTexture = (material, slotKey) => {
   setStatus(`Restored ${material.name || material.type} ${slotLabel}.`);
 };
 
-const createTexturePreview = (texture) => {
+const drawTexturePreview = (canvas, texture, spriteState = null) => {
+  const ctx = canvas.getContext('2d');
+  const image = getTextureImage(texture);
+  const sourceWidth = image?.naturalWidth ?? image?.videoWidth ?? image?.displayWidth ?? image?.width;
+  const sourceHeight = image?.naturalHeight ?? image?.videoHeight ?? image?.displayHeight ?? image?.height;
+
+  if (!ctx || !image || !sourceWidth || !sourceHeight) {
+    throw new Error('Missing drawable source');
+  }
+
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  if (spriteState) {
+    normalizeSpriteState(spriteState, texture);
+    const previewFrame = getSpriteVisibleFrame(spriteState);
+    const cellWidth = sourceWidth / spriteState.columns;
+    const cellHeight = sourceHeight / spriteState.rows;
+    const col = previewFrame % spriteState.columns;
+    const row = Math.floor(previewFrame / spriteState.columns);
+    const sx = col * cellWidth;
+    const sy = row * cellHeight;
+    ctx.drawImage(image, sx, sy, cellWidth, cellHeight, 0, 0, canvas.width, canvas.height);
+    return;
+  }
+
+  const scale = Math.max(canvas.width / sourceWidth, canvas.height / sourceHeight);
+  const drawWidth = sourceWidth * scale;
+  const drawHeight = sourceHeight * scale;
+  const offsetX = (canvas.width - drawWidth) * 0.5;
+  const offsetY = (canvas.height - drawHeight) * 0.5;
+  ctx.drawImage(image, offsetX, offsetY, drawWidth, drawHeight);
+};
+
+const createTexturePreview = (texture, spriteState = null) => {
   const thumb = document.createElement('div');
   thumb.className = 'texture-thumb';
 
@@ -543,28 +866,20 @@ const createTexturePreview = (texture) => {
   canvas.height = 72;
 
   try {
-    const ctx = canvas.getContext('2d');
-    const sourceWidth = image.naturalWidth ?? image.videoWidth ?? image.displayWidth ?? image.width;
-    const sourceHeight = image.naturalHeight ?? image.videoHeight ?? image.displayHeight ?? image.height;
-
-    if (!ctx || !sourceWidth || !sourceHeight) {
-      throw new Error('Missing drawable source');
-    }
-
-    const scale = Math.max(canvas.width / sourceWidth, canvas.height / sourceHeight);
-    const drawWidth = sourceWidth * scale;
-    const drawHeight = sourceHeight * scale;
-    const offsetX = (canvas.width - drawWidth) * 0.5;
-    const offsetY = (canvas.height - drawHeight) * 0.5;
-
-    ctx.drawImage(image, offsetX, offsetY, drawWidth, drawHeight);
+    drawTexturePreview(canvas, texture, spriteState);
     thumb.append(canvas);
-    return thumb;
+    return {
+      element: thumb,
+      refresh: () => drawTexturePreview(canvas, texture, spriteState),
+    };
   } catch (error) {
     const fallback = document.createElement('div');
     fallback.className = 'texture-thumb texture-thumb-fallback';
     fallback.textContent = texture.isCompressedTexture ? 'Compressed texture' : 'Preview unavailable';
-    return fallback;
+    return {
+      element: fallback,
+      refresh: () => {},
+    };
   }
 };
 
@@ -696,7 +1011,8 @@ const renderTextureInspector = (root) => {
       const item = document.createElement('article');
       item.className = 'texture-item';
 
-      const preview = createTexturePreview(texture);
+      const spriteState = getSpriteBinding(material.materialRef, key)?.sprite ?? null;
+      const { element: preview, refresh: refreshPreview } = createTexturePreview(texture, spriteState);
 
       const body = document.createElement('div');
       body.className = 'texture-body';
@@ -710,7 +1026,16 @@ const renderTextureInspector = (root) => {
 
       const metaInfo = document.createElement('div');
       metaInfo.className = 'texture-meta';
-      metaInfo.textContent = `${getTextureDimensions(texture)} · ${texture.colorSpace === THREE.SRGBColorSpace ? 'sRGB' : 'Linear'} · ${texture.flipY ? 'FlipY' : 'No FlipY'}`;
+      const metaParts = [
+        getTextureDimensions(texture),
+        texture.colorSpace === THREE.SRGBColorSpace ? 'sRGB' : 'Linear',
+        texture.flipY ? 'FlipY' : 'No FlipY',
+      ];
+      if (spriteState) {
+        metaParts.push(`Sprite ${spriteState.columns} x ${spriteState.rows}`);
+        metaParts.push(`Frame ${getSpriteVisibleFrame(spriteState) + 1}/${spriteState.frameCount}`);
+      }
+      metaInfo.textContent = metaParts.join(' · ');
 
       body.append(slot, name, metaInfo);
 
@@ -721,7 +1046,7 @@ const renderTextureInspector = (root) => {
         const replaceBtn = document.createElement('button');
         replaceBtn.className = 'texture-action';
         replaceBtn.type = 'button';
-        replaceBtn.textContent = 'Replace';
+        replaceBtn.textContent = spriteState ? 'Swap sprite' : 'Replace';
 
         const resetBtn = document.createElement('button');
         resetBtn.className = 'texture-action subtle';
@@ -739,7 +1064,7 @@ const renderTextureInspector = (root) => {
 
         const state = document.createElement('div');
         state.className = 'texture-state';
-        state.textContent = isOverridden ? 'Custom override' : 'Original';
+        state.textContent = spriteState ? (isOverridden ? 'Custom sprite' : 'Sprite active') : isOverridden ? 'Custom override' : 'Original';
 
         replaceBtn.addEventListener('click', () => fileInput.click());
         fileInput.addEventListener('change', async (event) => {
@@ -757,6 +1082,164 @@ const renderTextureInspector = (root) => {
 
         actionRow.append(replaceBtn, resetBtn, state, fileInput);
         body.append(actionRow);
+      }
+
+      if (spriteState) {
+        const createNumberField = ({ label: fieldLabel, value, min = 1, max = 16, step = 1 }) => {
+          const field = document.createElement('label');
+          field.className = 'sprite-field';
+
+          const text = document.createElement('span');
+          text.textContent = fieldLabel;
+
+          const input = document.createElement('input');
+          input.className = 'sprite-input';
+          input.type = 'number';
+          input.min = String(min);
+          input.max = String(max);
+          input.step = String(step);
+          input.value = String(value);
+
+          field.append(text, input);
+          return { field, input };
+        };
+
+        const spritePanel = document.createElement('div');
+        spritePanel.className = 'sprite-panel';
+
+        const panelTitle = document.createElement('div');
+        panelTitle.className = 'sprite-title';
+        panelTitle.textContent = 'Sprite Sheet';
+
+        const panelSub = document.createElement('div');
+        panelSub.className = 'sprite-sub';
+        panelSub.textContent = 'Frames run left to right, top to bottom. The face layers default to a 4 x 4 grid.';
+
+        const fields = document.createElement('div');
+        fields.className = 'sprite-grid';
+
+        const columnsField = createNumberField({ label: 'Cols', value: spriteState.columns, max: 16 });
+        const rowsField = createNumberField({ label: 'Rows', value: spriteState.rows, max: 16 });
+        const framesField = createNumberField({
+          label: 'Frames',
+          value: spriteState.frameCount,
+          max: spriteState.columns * spriteState.rows,
+        });
+        const expressionField = createNumberField({
+          label: 'Expression',
+          value: spriteState.expressionFrame + 1,
+          max: spriteState.frameCount,
+        });
+        const playbackRowField = createNumberField({
+          label: 'Play Row',
+          value: spriteState.playbackRow + 1,
+          max: spriteState.rows,
+        });
+        const blinkField = createNumberField({
+          label: 'Blink',
+          value: spriteState.blinkFrame + 1,
+          max: spriteState.frameCount,
+        });
+        const fpsField = createNumberField({ label: 'FPS', value: spriteState.fps, min: 1, max: 60, step: 0.5 });
+
+        fields.append(
+          columnsField.field,
+          rowsField.field,
+          framesField.field,
+          expressionField.field,
+          playbackRowField.field,
+          blinkField.field,
+          fpsField.field,
+        );
+
+        const spriteControls = document.createElement('div');
+        spriteControls.className = 'sprite-controls';
+
+        const blinkToggle = document.createElement('label');
+        blinkToggle.className = 'sprite-toggle';
+        const blinkCheckbox = document.createElement('input');
+        blinkCheckbox.type = 'checkbox';
+        blinkCheckbox.checked = spriteState.blinkEnabled;
+        const blinkLabel = document.createElement('span');
+        blinkLabel.textContent = 'Auto blink';
+        blinkToggle.append(blinkCheckbox, blinkLabel);
+
+        const playBtn = document.createElement('button');
+        playBtn.className = 'texture-action';
+        playBtn.type = 'button';
+
+        const frameState = document.createElement('div');
+        frameState.className = 'texture-state';
+
+        const refreshSpritePanel = () => {
+          normalizeSpriteState(spriteState, texture);
+          columnsField.input.value = String(spriteState.columns);
+          rowsField.input.value = String(spriteState.rows);
+          framesField.input.max = String(spriteState.columns * spriteState.rows);
+          framesField.input.value = String(spriteState.frameCount);
+          expressionField.input.max = String(spriteState.frameCount);
+          expressionField.input.value = String(spriteState.expressionFrame + 1);
+          playbackRowField.input.max = String(spriteState.rows);
+          playbackRowField.input.value = String(spriteState.playbackRow + 1);
+          blinkField.input.max = String(spriteState.frameCount);
+          blinkField.input.value = String(spriteState.blinkFrame + 1);
+          fpsField.input.value = String(spriteState.fps);
+          blinkCheckbox.checked = spriteState.blinkEnabled;
+          playBtn.textContent = spriteState.isPlaying ? 'Pause row' : 'Play row';
+          frameState.textContent = `Row ${spriteState.playbackRow + 1} · Frame ${getSpriteVisibleFrame(spriteState) + 1} / ${spriteState.frameCount}`;
+          refreshPreview();
+        };
+
+        const commitSpriteChanges = () => {
+          spriteState.columns = columnsField.input.value;
+          spriteState.rows = rowsField.input.value;
+          spriteState.frameCount = framesField.input.value;
+          spriteState.expressionFrame = Number(expressionField.input.value) - 1;
+          spriteState.playbackRow = Number(playbackRowField.input.value) - 1;
+          spriteState.blinkFrame = Number(blinkField.input.value) - 1;
+          spriteState.fps = fpsField.input.value;
+          normalizeSpriteState(spriteState, texture);
+          if (spriteState.isPlaying) {
+            primeSpriteRowPlayback(spriteState);
+          } else {
+            spriteState.activeFrame = spriteState.expressionFrame;
+          }
+          applySpriteFrameToTexture(texture, spriteState);
+          refreshSpritePanel();
+        };
+
+        [columnsField, rowsField, framesField, expressionField, playbackRowField, blinkField, fpsField].forEach(({ input }) => {
+          input.addEventListener('change', commitSpriteChanges);
+        });
+
+        blinkCheckbox.addEventListener('change', () => {
+          spriteState.blinkEnabled = blinkCheckbox.checked;
+          scheduleNextBlink(spriteState);
+          applySpriteFrameToTexture(texture, spriteState);
+          refreshSpritePanel();
+        });
+
+        playBtn.addEventListener('click', () => {
+          spriteState.isPlaying = !spriteState.isPlaying;
+          spriteState.playbackAccumulator = 0;
+
+          if (spriteState.isPlaying) {
+            primeSpriteRowPlayback(spriteState);
+          } else {
+            spriteState.activeFrame = spriteState.expressionFrame;
+            scheduleNextBlink(spriteState);
+          }
+
+          applySpriteFrameToTexture(texture, spriteState);
+          refreshSpritePanel();
+        });
+
+        spriteState.onFrameChange = refreshSpritePanel;
+        refreshSpritePanel();
+
+        spriteControls.append(blinkToggle, playBtn, frameState);
+        spritePanel.append(panelTitle, panelSub, fields, spriteControls);
+        body.append(spritePanel);
       }
 
       item.append(preview, body);
@@ -888,6 +1371,7 @@ const clearCurrentModel = ({ preserveFileSize = false } = {}) => {
   }
 
   if (!modelRoot) {
+    clearSpriteBindings();
     mixer = null;
     hasAnimations = false;
     isAnimationPlaying = false;
@@ -898,6 +1382,7 @@ const clearCurrentModel = ({ preserveFileSize = false } = {}) => {
     return;
   }
 
+  clearSpriteBindings();
   clearTextureOverrides();
   scene.remove(modelRoot);
   modelRoot.traverse((child) => {
@@ -1029,13 +1514,14 @@ const loadModel = async (url = currentModelUrl) => {
   scene.add(modelRoot);
   frameModel(modelRoot);
   applyShadowState(shadowToggle.checked);
+  ensureDefaultFaceSpriteBindings(modelRoot);
   renderTextureInspector(modelRoot);
 
   hasAnimations = Boolean(gltf.animations?.length);
-  isAnimationPlaying = hasAnimations;
+  isAnimationPlaying = false;
   animationClips = gltf.animations ? [...gltf.animations] : [];
   animationActions = [];
-  currentAnimationIndex = hasAnimations ? 0 : -1;
+  currentAnimationIndex = hasAnimations ? getDefaultAnimationIndex(animationClips) : -1;
 
   if (hasAnimations) {
     mixer = new THREE.AnimationMixer(modelRoot);
@@ -1045,7 +1531,7 @@ const loadModel = async (url = currentModelUrl) => {
       action.enabled = false;
       return action;
     });
-    setActiveAnimation(0);
+    setActiveAnimation(currentAnimationIndex);
   }
 
   syncAnimationControl();
@@ -1070,7 +1556,7 @@ const bootWithDefaults = async () => {
   try {
     await loadModel(DEFAULT_MODEL_URL);
     resolveAndApplyModelFileSize(DEFAULT_MODEL_URL);
-    modelFileName.textContent = 'assets/260406_daymo_motion.glb';
+    modelFileName.textContent = 'assets/260408_daymo_motion.glb';
     progressEl.value = 100;
     setStatus(`${LIGHTING_PRESETS[currentLightingPreset].label} ready.`);
   } catch (error) {
@@ -1162,6 +1648,7 @@ const animate = () => {
   const delta = clock.getDelta();
 
   if (mixer) mixer.update(delta);
+  stepSpriteAnimations(delta);
 
   controls.update();
   composer.render();

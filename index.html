@@ -400,6 +400,60 @@
         letter-spacing: 0.04em;
         text-transform: uppercase;
       }
+      .sprite-panel {
+        margin-top: 10px;
+        padding: 10px;
+        border-radius: 10px;
+        border: 1px solid rgba(255,255,255,0.08);
+        background: rgba(255,255,255,0.03);
+      }
+      .sprite-title {
+        font-size: 12px;
+        font-weight: 700;
+      }
+      .sprite-sub {
+        margin-top: 4px;
+        color: var(--muted);
+        font-size: 11px;
+        line-height: 1.5;
+      }
+      .sprite-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 8px;
+        margin-top: 10px;
+      }
+      .sprite-field {
+        display: grid;
+        gap: 5px;
+        color: var(--muted);
+        font-size: 10px;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+      }
+      .sprite-input {
+        width: 100%;
+        border-radius: 8px;
+        border: 1px solid rgba(255,255,255,0.1);
+        background: rgba(10, 12, 16, 0.8);
+        color: var(--text);
+        padding: 7px 9px;
+        font: inherit;
+      }
+      .sprite-controls {
+        display: flex;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-top: 10px;
+      }
+      .sprite-toggle {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        color: var(--muted);
+        font-size: 11px;
+      }
       .pill-row {
         display: flex;
         flex-wrap: wrap;
@@ -472,11 +526,11 @@
           <div class="file-btns">
             <label for="modelInput" class="btn primary">Choose GLB</label>
             <label for="hdrInput" class="btn">Choose HDRI</label>
-            <a class="btn" href="./assets/260406_daymo_motion.glb" download="260406_daymo_motion.glb">Download default GLB</a>
+            <a class="btn" href="./assets/260408_daymo_motion.glb" download="260408_daymo_motion.glb">Download default GLB</a>
           </div>
           <div class="file-chip">
             <span>Model</span>
-            <span id="modelFileName">assets/260406_daymo_motion.glb</span>
+            <span id="modelFileName">assets/260408_daymo_motion.glb</span>
           </div>
           <div class="file-chip">
             <span>HDRI</span>
@@ -550,7 +604,7 @@
       <aside id="inspector">
         <div class="inspector-head">
           <div class="inspector-title">Texture Inspector</div>
-          <div class="inspector-sub">Base Color can be replaced and restored per material.</div>
+          <div class="inspector-sub">face_1, face_2, face_3 Base Color maps load as 4 x 4 sprite sheets by default.</div>
         </div>
 
         <div class="inspector-body">
@@ -598,6 +652,6 @@
       }
     }
     </script>
-    <script type="module" src="./viewer.js?v=20260406-3"></script>
+    <script type="module" src="./viewer.js?v=20260410-face-sprite-1"></script>
   </body>
 </html>

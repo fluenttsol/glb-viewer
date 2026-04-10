@@ -14,7 +14,7 @@
 
 - 엔트리: `glb-viewer/index.html`
 - 메인 로직: `glb-viewer/viewer.js`
-- 기본 모델: `glb-viewer/assets/260406_daymo_motion.glb`
+- 기본 모델: `glb-viewer/assets/260408_daymo_motion.glb`
 
 ## 실행
 
@@ -36,5 +36,5 @@ python3 -m http.server 8123
 ## 작업 시 주의
 
 - `index.html`의 DOM id와 `viewer.js`의 `querySelector`가 맞아야 함
-- 기본 모델 파일명은 `260406_daymo_motion.glb` 기준
+- 기본 모델 파일명은 `260408_daymo_motion.glb` 기준
 - 텍스처 교체 시 glTF 규칙상 `sRGB`, `flipY = false` 처리가 중요함

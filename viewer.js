@@ -9,8 +9,13 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
 
-const DEFAULT_MODEL_URL = './assets/260406_daymo_motion.glb?v=20260406';
-const FLAT_BACKGROUND = new THREE.Color(0x0b0d10);
+const CHARACTER_ASSET_PATH = './assets/260408_daymo_motion.glb';
+const CHARACTER_ASSET_LABEL = 'assets/260408_daymo_motion.glb';
+const CHARACTER_ASSET_VERSION = '20260408-workbench-1';
+const buildCharacterAssetUrl = ({ bustCache = false } = {}) =>
+  `${CHARACTER_ASSET_PATH}?v=${bustCache ? `${CHARACTER_ASSET_VERSION}-${Date.now()}` : CHARACTER_ASSET_VERSION}`;
+const DEFAULT_FLAT_BACKGROUND = '#0b0d10';
+const FLAT_BACKGROUND = new THREE.Color(DEFAULT_FLAT_BACKGROUND);
 const DEFAULT_CAMERA_POSITION = new THREE.Vector3(1.8, 2, 3.2);
 const LIGHTING_PRESETS = {
   neutral: {
@@ -63,7 +68,7 @@ const canvas = document.querySelector('#canvas');
 const viewport = document.querySelector('#viewport');
 const progressEl = document.querySelector('#progress');
 const statusEl = document.querySelector('#status');
-const bgToggle = document.querySelector('#bgToggle');
+const backgroundSwatches = [...document.querySelectorAll('[data-background-color]')];
 const shadowToggle = document.querySelector('#shadowToggle');
 const autoRotateToggle = document.querySelector('#autoRotateToggle');
 const animationSelect = document.querySelector('#animationSelect');
@@ -72,7 +77,7 @@ const animationHint = document.querySelector('#animationHint');
 const animationSub = document.querySelector('#animationSub');
 const toggleAnimationBtn = document.querySelector('#toggleAnimationBtn');
 const resetCameraBtn = document.querySelector('#resetCameraBtn');
-const clearModelBtn = document.querySelector('#clearModelBtn');
+const reloadCharacterBtn = document.querySelector('#reloadCharacterBtn');
 const summaryMeshes = document.querySelector('#summaryMeshes');
 const summaryMaterials = document.querySelector('#summaryMaterials');
 const summaryTextures = document.querySelector('#summaryTextures');
@@ -80,8 +85,6 @@ const summaryVertices = document.querySelector('#summaryVertices');
 const summaryFileSize = document.querySelector('#summaryFileSize');
 const inspectorEmpty = document.querySelector('#inspectorEmpty');
 const textureInspectorList = document.querySelector('#textureInspectorList');
-const dropzone = document.querySelector('#dropzone');
-const modelInput = document.querySelector('#modelInput');
 const hdrInput = document.querySelector('#hdrInput');
 const modelFileName = document.querySelector('#modelFileName');
 const hdrFileName = document.querySelector('#hdrFileName');
@@ -102,6 +105,57 @@ const TEXTURE_SLOTS = [
 ];
 const REPLACEABLE_TEXTURE_SLOTS = new Set(['map', 'emissiveMap']);
 const TEXTURE_LABELS = new Map(TEXTURE_SLOTS);
+const SPRITE_REPLACEABLE_TEXTURE_SLOTS = new Set(['map']);
+const INSPECTOR_MATERIAL_ALLOWLIST = new Set(['image', 'face_1', 'face_2', 'face_3']);
+const FACE_ASCII_TARGET_NAMES = new Set(['face_2', 'face_3']);
+const FACE_SPRITE_TARGET_NAMES = new Set(['face', 'face_1', 'face_2', 'face_3']);
+const FACE_OVERLAY_MESH_NAMES = new Set(['face_1', 'face_2', 'face_3']);
+const FACE_HIDDEN_BASE_LAYER_NAMES = new Set(['face_1']);
+const FACE_OVERLAY_RENDER_ORDER = new Map([
+  ['face_1', 20],
+  ['face_2', 21],
+  ['face_3', 22],
+]);
+const FACE_SPRITE_DEFAULTS = {
+  columns: 4,
+  rows: 4,
+  frameCount: 16,
+  expressionFrame: 0,
+  blinkFrame: 4,
+};
+const FACE_SPRITE_DEFAULTS_BY_MATERIAL = new Map([
+  ['face', FACE_SPRITE_DEFAULTS],
+  ['face_1', FACE_SPRITE_DEFAULTS],
+  ['face_2', { ...FACE_SPRITE_DEFAULTS, expressionFrame: 5 }],
+  ['face_3', { ...FACE_SPRITE_DEFAULTS, expressionFrame: 2 }],
+]);
+const FACE_ASCII_DEFAULTS_BY_MATERIAL = new Map([
+  ['face_2', { ...FACE_SPRITE_DEFAULTS, expressionFrame: 5 }],
+  ['face_3', { ...FACE_SPRITE_DEFAULTS, expressionFrame: 2 }],
+]);
+const ASCII_FRAME_LAYOUT = Object.freeze({
+  columns: 4,
+  rows: 4,
+  frameCount: 16,
+});
+const ASCII_TEXTURE_RENDER = Object.freeze({
+  textureSize: 1024,
+  gridColumns: 28,
+  gridRows: 12,
+  fontFamily: '"SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace',
+});
+const ASCII_EYE_BOXES = Object.freeze({
+  left: { x: 353, y: 387, width: 70, height: 98 },
+  right: { x: 602, y: 387, width: 70, height: 98 },
+  mouth: { x: 465, y: 459, width: 100, height: 20 },
+});
+const ASCII_EYE_ROW_ANCHORS = Object.freeze({
+  brow: 0.18,
+  accent: 0.34,
+  eyeTop: 0.54,
+  eyeBottom: 0.74,
+  mouth: 0.5,
+});
 const GAMMA_SHADER = {
   uniforms: {
     tDiffuse: { value: null },
@@ -211,8 +265,7 @@ let modelRoot = null;
 let envTexture = null;
 let studioEnvTexture = null;
 let hdrEnvTexture = null;
-let currentModelUrl = DEFAULT_MODEL_URL;
-let currentModelObjectUrl = null;
+let currentModelUrl = buildCharacterAssetUrl();
 let currentHdrObjectUrl = null;
 let lastFrame = null;
 let currentRigScale = 1.75;
@@ -225,6 +278,8 @@ let animationActions = [];
 let animationClips = [];
 let currentAnimationIndex = -1;
 const textureOverrides = new Map();
+const spriteBindings = new Map();
+const asciiBindings = new Map();
 const isFileProtocol = window.location.protocol === 'file:';
 
 const setStatus = (text, isError = false) => {
@@ -250,6 +305,8 @@ const formatFileSize = (bytes) => {
   return `${size.toFixed(digits)} ${units[unitIndex]}`;
 };
 
+const getFlatBackgroundHex = () => `#${FLAT_BACKGROUND.getHexString()}`;
+
 const setGamma = (value = VIEWER_DEFAULTS.gamma) => {
   const safeValue = Math.max(value, 0.01);
   gammaPass.uniforms.gamma.value = safeValue;
@@ -269,6 +326,11 @@ const getAnimationLabel = (clip, index) => {
   return name ? name : `Animation ${index + 1}`;
 };
 
+const getDefaultAnimationIndex = (clips = []) => {
+  const tposeIndex = clips.findIndex((clip) => clip?.name?.trim()?.toLowerCase() === 'tpose');
+  return tposeIndex >= 0 ? tposeIndex : 0;
+};
+
 const syncAnimationMeta = () => {
   const count = animationClips.length;
   const hasClipOptions = count > 0;
@@ -277,7 +339,7 @@ const syncAnimationMeta = () => {
 
   if (!hasClipOptions) {
     if (animationHint) animationHint.textContent = 'No clips';
-    if (animationSub) animationSub.textContent = 'Load an animated GLB to choose a clip here.';
+    if (animationSub) animationSub.textContent = 'The current character asset has no animation clips.';
     return;
   }
 
@@ -372,7 +434,7 @@ const refreshInspectorSummary = () => {
   renderTextureInspector(modelRoot);
 };
 
-const resetTextureInspector = (message = 'GLB를 로드하면 여기서 머티리얼별 텍스처를 확인할 수 있습니다.') => {
+const resetTextureInspector = (message = 'Character asset details will appear here once the workbench finishes loading.') => {
   setInspectorSummary();
   inspectorEmpty.textContent = message;
   inspectorEmpty.hidden = false;
@@ -381,29 +443,880 @@ const resetTextureInspector = (message = 'GLB를 로드하면 여기서 머티�
 
 const getTextureImage = (texture) => texture?.source?.data ?? texture?.image ?? null;
 
-const getTextureDimensions = (texture) => {
+const getTextureImageSize = (texture) => {
   const image = getTextureImage(texture);
-  const width =
-    image?.naturalWidth ??
-    image?.videoWidth ??
-    image?.displayWidth ??
-    image?.width ??
-    texture?.image?.width;
-  const height =
-    image?.naturalHeight ??
-    image?.videoHeight ??
-    image?.displayHeight ??
-    image?.height ??
-    texture?.image?.height;
+
+  return {
+    width:
+      image?.naturalWidth ??
+      image?.videoWidth ??
+      image?.displayWidth ??
+      image?.width ??
+      texture?.image?.width ??
+      0,
+    height:
+      image?.naturalHeight ??
+      image?.videoHeight ??
+      image?.displayHeight ??
+      image?.height ??
+      texture?.image?.height ??
+      0,
+  };
+};
+
+const getTextureDimensions = (texture) => {
+  const { width, height } = getTextureImageSize(texture);
 
   return width && height ? `${width} x ${height}` : 'Unknown size';
 };
 
 const getTextureOverrideKey = (material, slotKey) => `${material.uuid}:${slotKey}`;
+const getTextureOverrideRecord = (material, slotKey) => textureOverrides.get(getTextureOverrideKey(material, slotKey)) ?? null;
+const getSpriteBinding = (material, slotKey) => spriteBindings.get(getTextureOverrideKey(material, slotKey)) ?? null;
+const getAsciiBinding = (material, slotKey) => asciiBindings.get(getTextureOverrideKey(material, slotKey)) ?? null;
+const shouldShowMaterialInInspector = (materialName = '') => INSPECTOR_MATERIAL_ALLOWLIST.has(materialName.trim().toLowerCase());
+const isFaceOverlayMesh = (mesh) => FACE_OVERLAY_MESH_NAMES.has(mesh?.name?.trim()?.toLowerCase());
+const shouldHideFaceBaseLayer = (mesh) => FACE_HIDDEN_BASE_LAYER_NAMES.has(mesh?.name?.trim()?.toLowerCase());
+const isFaceAsciiTarget = (material, slotKey) => {
+  const name = material?.name?.trim()?.toLowerCase();
+  return slotKey === 'map' && FACE_ASCII_TARGET_NAMES.has(name);
+};
+const isFaceSpriteTarget = (material, slotKey) => {
+  const name = material?.name?.trim()?.toLowerCase();
+  return slotKey === 'map' && FACE_SPRITE_TARGET_NAMES.has(name);
+};
+const getFaceSpriteDefaults = (material) => {
+  const name = material?.name?.trim()?.toLowerCase() ?? '';
+  return FACE_SPRITE_DEFAULTS_BY_MATERIAL.get(name) ?? FACE_SPRITE_DEFAULTS;
+};
+const getFaceAsciiDefaults = (material) => {
+  const name = material?.name?.trim()?.toLowerCase() ?? '';
+  return FACE_ASCII_DEFAULTS_BY_MATERIAL.get(name) ?? FACE_SPRITE_DEFAULTS;
+};
+const sanitizeInteger = (value, fallback = 1) => {
+  const nextValue = Math.floor(Number(value));
+  return Number.isFinite(nextValue) && nextValue > 0 ? nextValue : fallback;
+};
+const sanitizeNumber = (value, fallback = 1) => {
+  const nextValue = Number(value);
+  return Number.isFinite(nextValue) && nextValue > 0 ? nextValue : fallback;
+};
+const clampSpriteFrame = (frame, frameCount = 1) => {
+  const safeFrameCount = Math.max(1, sanitizeInteger(frameCount, 1));
+  const nextFrame = Math.floor(Number(frame));
+  return THREE.MathUtils.clamp(Number.isFinite(nextFrame) ? nextFrame : 0, 0, safeFrameCount - 1);
+};
+const randomBetween = (min, max) => min + Math.random() * Math.max(0, max - min);
+
+const guessSpriteGrid = (texture) => {
+  const { width, height } = getTextureImageSize(texture);
+  if (!width || !height) return { columns: 1, rows: 1 };
+
+  const horizontalRatio = width / height;
+  const verticalRatio = height / width;
+  const roundedHorizontal = Math.round(horizontalRatio);
+  const roundedVertical = Math.round(verticalRatio);
+
+  if (roundedHorizontal > 1 && roundedHorizontal <= 16 && Math.abs(horizontalRatio - roundedHorizontal) < 0.04) {
+    return { columns: roundedHorizontal, rows: 1 };
+  }
+
+  if (roundedVertical > 1 && roundedVertical <= 16 && Math.abs(verticalRatio - roundedVertical) < 0.04) {
+    return { columns: 1, rows: roundedVertical };
+  }
+
+  return { columns: 1, rows: 1 };
+};
+
+const scheduleNextBlink = (spriteState, now = performance.now() * 0.001) => {
+  if (!spriteState) return;
+
+  spriteState.isBlinking = false;
+  spriteState.blinkUntil = 0;
+  spriteState.nextBlinkAt = now + randomBetween(spriteState.blinkMinDelay, spriteState.blinkMaxDelay);
+};
+
+const getSpriteVisibleFrame = (spriteState) => {
+  if (!spriteState) return 0;
+  if (spriteState.isPlaying) return spriteState.activeFrame;
+  if (spriteState.blinkEnabled && spriteState.isBlinking) return spriteState.blinkFrame;
+  return spriteState.expressionFrame;
+};
+
+const normalizeSpriteState = (spriteState, texture, { now = performance.now() * 0.001 } = {}) => {
+  if (!spriteState || !texture) return;
+
+  spriteState.columns = sanitizeInteger(spriteState.columns, 1);
+  spriteState.rows = sanitizeInteger(spriteState.rows, 1);
+  spriteState.frameCount = THREE.MathUtils.clamp(
+    sanitizeInteger(spriteState.frameCount, spriteState.columns * spriteState.rows),
+    1,
+    spriteState.columns * spriteState.rows,
+  );
+  spriteState.expressionFrame = clampSpriteFrame(spriteState.expressionFrame, spriteState.frameCount);
+  spriteState.blinkFrame = clampSpriteFrame(spriteState.blinkFrame, spriteState.frameCount);
+  spriteState.activeFrame = clampSpriteFrame(spriteState.activeFrame, spriteState.frameCount);
+  spriteState.fps = THREE.MathUtils.clamp(sanitizeNumber(spriteState.fps, 8), 0.25, 60);
+  spriteState.blinkMinDelay = Math.max(0.4, sanitizeNumber(spriteState.blinkMinDelay, 2.6));
+  spriteState.blinkMaxDelay = Math.max(spriteState.blinkMinDelay, sanitizeNumber(spriteState.blinkMaxDelay, 5.2));
+  spriteState.blinkHoldDuration = THREE.MathUtils.clamp(sanitizeNumber(spriteState.blinkHoldDuration, 0.12), 0.04, 0.45);
+  spriteState.baseRepeat ??= texture.repeat.clone();
+  spriteState.baseOffset ??= texture.offset.clone();
+
+  if (!spriteState.isPlaying) {
+    spriteState.activeFrame = spriteState.expressionFrame;
+    if (!spriteState.blinkEnabled) {
+      spriteState.isBlinking = false;
+    }
+  }
+
+  if (!Number.isFinite(spriteState.nextBlinkAt) || spriteState.nextBlinkAt <= 0) {
+    scheduleNextBlink(spriteState, now);
+  }
+};
+
+const applyTextureTransform = (texture, repeatX, repeatY, offsetX, offsetY) => {
+  if (!texture) return;
+
+  texture.repeat.set(repeatX, repeatY);
+  texture.offset.set(offsetX, offsetY);
+
+  if (!texture.matrixAutoUpdate) {
+    texture.updateMatrix();
+  }
+
+  texture.needsUpdate = true;
+};
+
+const resetTextureTransformForSprite = (texture) => {
+  if (!texture) return;
+
+  texture.rotation = 0;
+  texture.center.set(0, 0);
+  texture.matrixAutoUpdate = true;
+  applyTextureTransform(texture, 1, 1, 0, 0);
+};
+
+const createAsciiGrid = () =>
+  Array.from({ length: ASCII_TEXTURE_RENDER.gridRows }, () =>
+    Array.from({ length: ASCII_TEXTURE_RENDER.gridColumns }, () => ' '),
+  );
+
+const stampAsciiText = (grid, x, y, text = '') => {
+  if (!Array.isArray(grid) || !text) return;
+  const row = grid[y];
+  if (!row) return;
+
+  [...text].forEach((char, index) => {
+    const targetX = x + index;
+    if (targetX < 0 || targetX >= row.length) return;
+    row[targetX] = char;
+  });
+};
+
+const asciiGridToString = (grid) => grid.map((row) => row.join('')).join('\n');
+
+const getAsciiFramePreset = (frameIndex) => {
+  const presets = [
+    { brow: 'neutral', eye: 'open', pupil: 'round' },
+    { brow: 'soft', eye: 'smile', pupil: 'soft' },
+    { brow: 'angry', eye: 'open', pupil: 'small' },
+    { brow: 'sad', eye: 'open', pupil: 'round-low' },
+    { brow: 'neutral', eye: 'closed', pupil: 'none' },
+    { brow: 'neutral', eye: 'wink-left', pupil: 'round' },
+    { brow: 'neutral', eye: 'wide', pupil: 'tiny' },
+    { brow: 'neutral', eye: 'squint', pupil: 'tiny' },
+    { brow: 'neutral', eye: 'rest', pupil: 'small' },
+    { brow: 'neutral', eye: 'wide', pupil: 'wide' },
+    { brow: 'soft', eye: 'smile', pupil: 'small' },
+    { brow: 'neutral', eye: 'round', pupil: 'wide' },
+    { brow: 'neutral', eye: 'round-small', pupil: 'small' },
+    { brow: 'neutral', eye: 'rest', pupil: 'tiny' },
+    { brow: 'flat', eye: 'half', pupil: 'small' },
+    { brow: 'surprised', eye: 'wide', pupil: 'wide' },
+  ];
+
+  return presets[clampSpriteFrame(frameIndex, presets.length)] ?? presets[0];
+};
+
+const getAsciiBrowPattern = (style, side) => {
+  switch (style) {
+    case 'soft':
+      return side === 'left' ? '  __/ ' : ' \\__  ';
+    case 'angry':
+      return side === 'left' ? '   __\\' : '/__   ';
+    case 'sad':
+      return side === 'left' ? ' /__  ' : '  __\\ ';
+    case 'surprised':
+      return '  --  ';
+    case 'flat':
+      return ' ---- ';
+    default:
+      return ' ____ ';
+  }
+};
+
+const getAsciiEyePattern = (style, side) => {
+  const open = [' /--\\ ', ' \\__/ '];
+
+  switch (style) {
+    case 'smile':
+      return [' \\__/ ', '      '];
+    case 'closed':
+      return [' ---- ', '      '];
+    case 'squint':
+      return [' =--= ', '      '];
+    case 'wide':
+      return [' /~~\\ ', ' \\__/ '];
+    case 'rest':
+      return [' /==\\ ', ' \\__/ '];
+    case 'half':
+      return [' /--\\ ', '  --  '];
+    case 'round':
+      return [' /~~\\ ', ' \\~~/ '];
+    case 'round-small':
+      return [' /==\\ ', ' \\==/ '];
+    case 'wink-left':
+      return side === 'left' ? [' ---- ', '      '] : open;
+    default:
+      return open;
+  }
+};
+
+const getAsciiPupilPattern = (style, side, frameIndex) => {
+  const isWinkClosedEye = style !== 'none' && getAsciiFramePreset(frameIndex).eye === 'wink-left' && side === 'left';
+  if (isWinkClosedEye) return ['      ', '      '];
+
+  switch (style) {
+    case 'soft':
+      return ['  ,,  ', '      '];
+    case 'small':
+      return ['  ..  ', '      '];
+    case 'tiny':
+      return ['   .  ', '      '];
+    case 'wide':
+      return ['  OO  ', '      '];
+    case 'round-low':
+      return ['      ', '  oo  '];
+    case 'none':
+      return ['      ', '      '];
+    default:
+      return ['  oo  ', '      '];
+  }
+};
+
+const getAsciiMouthPattern = (frameIndex) => {
+  const patterns = [
+    '  __  ',
+    '  ..  ',
+    ' (__) ',
+    '  --  ',
+    '  ==  ',
+    ' <__> ',
+    ' (__) ',
+    '  --  ',
+    '  ah  ',
+    ' /__\\ ',
+    '  se  ',
+    '  ==  ',
+    '  oo  ',
+    '  OO  ',
+    '  --  ',
+    '  __  ',
+  ];
+
+  return patterns[clampSpriteFrame(frameIndex, patterns.length)] ?? patterns[0];
+};
+
+const createAsciiFrameSegments = (material, frameIndex) => {
+  const materialName = material?.name?.trim()?.toLowerCase() ?? '';
+  const layerType = materialName === 'face_2' ? 'eyes' : 'mouth';
+  const preset = getAsciiFramePreset(frameIndex);
+  const segments = [];
+
+  const pushSegment = (boxKey, row, text, offsetX = 0) => {
+    if (!text || !text.trim()) return;
+    segments.push({ boxKey, row, text, offsetX });
+  };
+
+  if (layerType === 'eyes') {
+    pushSegment('left', 'brow', getAsciiBrowPattern(preset.brow, 'left'));
+    pushSegment('right', 'brow', getAsciiBrowPattern(preset.brow, 'right'));
+
+    const leftEye = getAsciiEyePattern(preset.eye, 'left');
+    const rightEye = getAsciiEyePattern(preset.eye, 'right');
+    pushSegment('left', 'eyeTop', leftEye[0]);
+    pushSegment('left', 'eyeBottom', leftEye[1]);
+    pushSegment('right', 'eyeTop', rightEye[0]);
+    pushSegment('right', 'eyeBottom', rightEye[1]);
+
+    const leftPupil = getAsciiPupilPattern(preset.pupil, 'left', frameIndex);
+    const rightPupil = getAsciiPupilPattern(preset.pupil, 'right', frameIndex);
+    pushSegment('left', 'eyeTop', leftPupil[0]);
+    pushSegment('left', 'eyeBottom', leftPupil[1]);
+    pushSegment('right', 'eyeTop', rightPupil[0]);
+    pushSegment('right', 'eyeBottom', rightPupil[1]);
+
+    if (preset.eye === 'wide') {
+      pushSegment('left', 'accent', '.', -0.14);
+      pushSegment('right', 'accent', '.', -0.14);
+    }
+  } else {
+    pushSegment('mouth', 'mouth', getAsciiMouthPattern(frameIndex));
+  }
+
+  return segments;
+};
+
+const createAsciiFrameString = (material, frameIndex) => {
+  const materialName = material?.name?.trim()?.toLowerCase() ?? '';
+  const layerType = materialName === 'face_2' ? 'eyes' : 'mouth';
+  const preset = getAsciiFramePreset(frameIndex);
+  const grid = createAsciiGrid();
+  const leftX = 4;
+  const rightX = 18;
+  const browY = 2;
+  const eyeTopY = 5;
+  const eyeBottomY = 6;
+  const mouthX = 10;
+  const mouthY = 9;
+
+  if (layerType === 'eyes') {
+    stampAsciiText(grid, leftX, browY, getAsciiBrowPattern(preset.brow, 'left'));
+    stampAsciiText(grid, rightX, browY, getAsciiBrowPattern(preset.brow, 'right'));
+
+    const leftEye = getAsciiEyePattern(preset.eye, 'left');
+    const rightEye = getAsciiEyePattern(preset.eye, 'right');
+    stampAsciiText(grid, leftX, eyeTopY, leftEye[0]);
+    stampAsciiText(grid, leftX, eyeBottomY, leftEye[1]);
+    stampAsciiText(grid, rightX, eyeTopY, rightEye[0]);
+    stampAsciiText(grid, rightX, eyeBottomY, rightEye[1]);
+
+    const leftPupil = getAsciiPupilPattern(preset.pupil, 'left', frameIndex);
+    const rightPupil = getAsciiPupilPattern(preset.pupil, 'right', frameIndex);
+    stampAsciiText(grid, leftX, eyeTopY, leftPupil[0]);
+    stampAsciiText(grid, leftX, eyeBottomY, leftPupil[1]);
+    stampAsciiText(grid, rightX, eyeTopY, rightPupil[0]);
+    stampAsciiText(grid, rightX, eyeBottomY, rightPupil[1]);
+
+    if (preset.eye === 'wide') {
+      stampAsciiText(grid, leftX + 1, eyeTopY - 1, '.');
+      stampAsciiText(grid, rightX + 1, eyeTopY - 1, '.');
+    }
+  } else {
+    stampAsciiText(grid, mouthX, mouthY, getAsciiMouthPattern(frameIndex));
+  }
+
+  return asciiGridToString(grid);
+};
+
+const deriveAsciiForegroundColor = (texture, { brightness = 0.86, fallback = 'rgb(18, 24, 30)' } = {}) => {
+  const image = getTextureImage(texture);
+  if (!image) return fallback;
+
+  const sampleCanvas = document.createElement('canvas');
+  sampleCanvas.width = 32;
+  sampleCanvas.height = 32;
+
+  const context = sampleCanvas.getContext('2d', { willReadFrequently: true });
+  if (!context) return fallback;
+
+  try {
+    context.clearRect(0, 0, sampleCanvas.width, sampleCanvas.height);
+    context.drawImage(image, 0, 0, sampleCanvas.width, sampleCanvas.height);
+    const { data } = context.getImageData(0, 0, sampleCanvas.width, sampleCanvas.height);
+
+    let totalWeight = 0;
+    let red = 0;
+    let green = 0;
+    let blue = 0;
+
+    for (let index = 0; index < data.length; index += 4) {
+      const alpha = data[index + 3] / 255;
+      if (alpha < 0.08) continue;
+
+      const luminance = (data[index] + data[index + 1] + data[index + 2]) / 3;
+      const weight = alpha * (1.2 + ((255 - luminance) / 255) * 2.4);
+      totalWeight += weight;
+      red += data[index] * weight;
+      green += data[index + 1] * weight;
+      blue += data[index + 2] * weight;
+    }
+
+    if (totalWeight <= Number.EPSILON) return fallback;
+
+    const toChannel = (value) => THREE.MathUtils.clamp(Math.round((value / totalWeight) * brightness), 0, 255);
+    return `rgb(${toChannel(red)}, ${toChannel(green)}, ${toChannel(blue)})`;
+  } catch (error) {
+    console.warn('Failed to sample ASCII foreground color.', error);
+    return fallback;
+  }
+};
+
+const getAsciiVisibleFrame = (asciiState) => {
+  if (!asciiState) return 0;
+  if (asciiState.isPlaying) return asciiState.activeFrame;
+  if (asciiState.blinkEnabled && asciiState.isBlinking) return asciiState.blinkFrame;
+  return asciiState.expressionFrame;
+};
+
+const normalizeAsciiState = (asciiState, { now = performance.now() * 0.001 } = {}) => {
+  if (!asciiState) return;
+
+  asciiState.columns = ASCII_FRAME_LAYOUT.columns;
+  asciiState.rows = ASCII_FRAME_LAYOUT.rows;
+  asciiState.gridColumns = ASCII_TEXTURE_RENDER.gridColumns;
+  asciiState.gridRows = ASCII_TEXTURE_RENDER.gridRows;
+  asciiState.frameCount = THREE.MathUtils.clamp(
+    sanitizeInteger(asciiState.frameCount, ASCII_FRAME_LAYOUT.frameCount),
+    1,
+    asciiState.columns * asciiState.rows,
+  );
+  asciiState.expressionFrame = clampSpriteFrame(asciiState.expressionFrame, asciiState.frameCount);
+  asciiState.blinkFrame = clampSpriteFrame(asciiState.blinkFrame, asciiState.frameCount);
+  asciiState.activeFrame = clampSpriteFrame(asciiState.activeFrame, asciiState.frameCount);
+  asciiState.fps = THREE.MathUtils.clamp(sanitizeNumber(asciiState.fps, 8), 0.25, 60);
+  asciiState.blinkMinDelay = Math.max(0.4, sanitizeNumber(asciiState.blinkMinDelay, 2.6));
+  asciiState.blinkMaxDelay = Math.max(asciiState.blinkMinDelay, sanitizeNumber(asciiState.blinkMaxDelay, 5.2));
+  asciiState.blinkHoldDuration = THREE.MathUtils.clamp(sanitizeNumber(asciiState.blinkHoldDuration, 0.12), 0.04, 0.45);
+  asciiState.playbackRow = THREE.MathUtils.clamp(
+    sanitizeInteger(asciiState.playbackRow + 1, 1) - 1,
+    0,
+    Math.max(0, asciiState.rows - 1),
+  );
+  asciiState.playbackMode = asciiState.playbackMode === 'sequence' ? 'sequence' : 'row';
+
+  if (!asciiState.isPlaying) {
+    asciiState.activeFrame = asciiState.expressionFrame;
+    if (!asciiState.blinkEnabled) {
+      asciiState.isBlinking = false;
+    }
+  }
+
+  if (!Number.isFinite(asciiState.nextBlinkAt) || asciiState.nextBlinkAt <= 0) {
+    scheduleNextBlink(asciiState, now);
+  }
+};
+
+const getAsciiPlaybackFrames = (asciiState) => {
+  if (!asciiState) return [];
+
+  if (asciiState.playbackMode === 'sequence') {
+    return Array.from({ length: asciiState.frameCount }, (_, index) => index);
+  }
+
+  const rowIndex = THREE.MathUtils.clamp(sanitizeInteger(asciiState.playbackRow + 1, 1) - 1, 0, asciiState.rows - 1);
+  const frames = [];
+
+  for (let col = 0; col < asciiState.columns; col += 1) {
+    const frame = rowIndex * asciiState.columns + col;
+    if (frame < asciiState.frameCount) {
+      frames.push(frame);
+    }
+  }
+
+  return frames;
+};
+
+const primeAsciiRowPlayback = (asciiState) => {
+  const frames = getAsciiPlaybackFrames(asciiState);
+  if (!frames.length) return;
+
+  asciiState.playbackCursor = 0;
+  asciiState.activeFrame = frames[0];
+};
+
+const drawAsciiSegment = (context, asciiState, segment) => {
+  const box = ASCII_EYE_BOXES[segment.boxKey];
+  if (!box) return;
+
+  const anchorY = ASCII_EYE_ROW_ANCHORS[segment.row] ?? ASCII_EYE_ROW_ANCHORS.eyeTop;
+  const glyphCount = Math.max(1, [...segment.text].length);
+  const widthScale =
+    segment.row === 'mouth' ? 0.96 : segment.row === 'accent' ? 0.22 : segment.row === 'brow' ? 0.98 : 1.04;
+  const heightScale =
+    segment.row === 'mouth'
+      ? 0.72
+      : segment.row === 'brow'
+        ? 0.18
+        : segment.row === 'accent'
+          ? 0.13
+          : segment.row === 'eyeBottom'
+            ? 0.22
+            : 0.24;
+  const fontSize = Math.min(
+    (box.width * widthScale) / (glyphCount * 0.62),
+    box.height * heightScale,
+  );
+  const x = box.x + box.width * (0.5 + segment.offsetX);
+  const y = box.y + box.height * anchorY;
+
+  context.font = `${asciiState.fontWeight} ${fontSize}px ${ASCII_TEXTURE_RENDER.fontFamily}`;
+  context.fillText(segment.text, x, y);
+};
+
+const renderAsciiFrameToTexture = (asciiState, frameIndex = getAsciiVisibleFrame(asciiState)) => {
+  if (!asciiState?.context || !asciiState?.canvas || !asciiState?.texture) return;
+
+  normalizeAsciiState(asciiState);
+
+  const nextFrame = clampSpriteFrame(frameIndex, asciiState.frameCount);
+  const frameText = asciiState.frames[nextFrame] ?? asciiState.frames[0] ?? '';
+  const frameSegments = asciiState.frameSegments[nextFrame] ?? [];
+  const context = asciiState.context;
+  const { canvas } = asciiState;
+  const frameChanged = asciiState.displayFrame !== nextFrame;
+
+  context.clearRect(0, 0, canvas.width, canvas.height);
+  context.fillStyle = asciiState.foregroundColor;
+  context.textAlign = 'center';
+  context.textBaseline = 'middle';
+  context.shadowColor = asciiState.foregroundColor;
+  context.shadowBlur = asciiState.shadowBlur;
+  context.shadowOffsetX = 0;
+  context.shadowOffsetY = 0;
+
+  if (frameSegments.length) {
+    frameSegments.forEach((segment) => drawAsciiSegment(context, asciiState, segment));
+  }
+
+  asciiState.texture.needsUpdate = true;
+  asciiState.displayFrame = nextFrame;
+  asciiState.currentFrameText = frameText;
+
+  if (frameChanged) {
+    asciiState.onFrameChange?.();
+  }
+};
+
+const createAsciiState = (material, sourceTexture, initialState = {}) => {
+  const materialName = material?.name?.trim()?.toLowerCase() ?? '';
+  const canvas = document.createElement('canvas');
+  canvas.width = ASCII_TEXTURE_RENDER.textureSize;
+  canvas.height = ASCII_TEXTURE_RENDER.textureSize;
+
+  const context = canvas.getContext('2d');
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.name = `${material?.name || 'face'} ASCII`;
+  texture.userData.asciiGenerated = true;
+  texture.userData.asciiSourceTexture = sourceTexture ?? null;
+  configureReplacementTexture(texture, 'map', sourceTexture);
+
+  const asciiState = {
+    columns: ASCII_FRAME_LAYOUT.columns,
+    rows: ASCII_FRAME_LAYOUT.rows,
+    gridColumns: ASCII_TEXTURE_RENDER.gridColumns,
+    gridRows: ASCII_TEXTURE_RENDER.gridRows,
+    frameCount: initialState.frameCount ?? ASCII_FRAME_LAYOUT.frameCount,
+    expressionFrame: initialState.expressionFrame ?? 0,
+    blinkFrame: initialState.blinkFrame ?? 4,
+    activeFrame: 0,
+    displayFrame: -1,
+    fps: 8,
+    isPlaying: false,
+    blinkEnabled: false,
+    blinkMinDelay: 2.6,
+    blinkMaxDelay: 5.2,
+    blinkHoldDuration: 0.12,
+    isBlinking: false,
+    nextBlinkAt: 0,
+    blinkUntil: 0,
+    playbackAccumulator: 0,
+    playbackRow: initialState.playbackRow ?? 0,
+    playbackMode: initialState.playbackMode ?? 'row',
+    playbackCursor: 0,
+    foregroundColor: deriveAsciiForegroundColor(sourceTexture, {
+      brightness: materialName === 'face_3' ? 1.04 : 0.82,
+      fallback: materialName === 'face_3' ? 'rgb(44, 52, 64)' : 'rgb(14, 18, 22)',
+    }),
+    fontWeight: materialName === 'face_3' ? 600 : 700,
+    shadowBlur: materialName === 'face_3' ? 0 : 8,
+    canvas,
+    context,
+    texture,
+    frames: Array.from({ length: ASCII_FRAME_LAYOUT.frameCount }, (_, index) => createAsciiFrameString(material, index)),
+    frameSegments: Array.from({ length: ASCII_FRAME_LAYOUT.frameCount }, (_, index) => createAsciiFrameSegments(material, index)),
+    currentFrameText: '',
+    onFrameChange: null,
+  };
+
+  normalizeAsciiState(asciiState);
+  scheduleNextBlink(asciiState);
+  renderAsciiFrameToTexture(asciiState);
+  return asciiState;
+};
+
+const applySpriteFrameToTexture = (texture, spriteState, frameIndex = getSpriteVisibleFrame(spriteState)) => {
+  if (!texture || !spriteState) return;
+
+  normalizeSpriteState(spriteState, texture);
+
+  const nextFrame = clampSpriteFrame(frameIndex, spriteState.frameCount);
+  const { width, height } = getTextureImageSize(texture);
+  const cellWidth = spriteState.baseRepeat.x / spriteState.columns;
+  const cellHeight = spriteState.baseRepeat.y / spriteState.rows;
+  const col = nextFrame % spriteState.columns;
+  const row = Math.floor(nextFrame / spriteState.columns);
+  const textureRow = Math.max(0, spriteState.rows - row - 1);
+  const insetU = width ? Math.min(0.5 / width, cellWidth * 0.12) : 0;
+  const insetV = height ? Math.min(0.5 / height, cellHeight * 0.12) : 0;
+  const repeatX = Math.max(cellWidth - insetU * 2, Number.EPSILON);
+  const repeatY = Math.max(cellHeight - insetV * 2, Number.EPSILON);
+  const offsetX = spriteState.baseOffset.x + col * cellWidth + insetU;
+  const offsetY = spriteState.baseOffset.y + textureRow * cellHeight + insetV;
+  const frameChanged = spriteState.displayFrame !== nextFrame;
+
+  applyTextureTransform(texture, repeatX, repeatY, offsetX, offsetY);
+  spriteState.displayFrame = nextFrame;
+
+  if (frameChanged) {
+    spriteState.onFrameChange?.();
+  }
+};
+
+const createSpriteState = (texture, initialState = {}) => {
+  const guessedGrid = guessSpriteGrid(texture);
+  const frameCount = initialState.frameCount ?? guessedGrid.columns * guessedGrid.rows;
+
+  resetTextureTransformForSprite(texture);
+
+  const spriteState = {
+    columns: initialState.columns ?? guessedGrid.columns,
+    rows: initialState.rows ?? guessedGrid.rows,
+    frameCount,
+    expressionFrame: initialState.expressionFrame ?? 0,
+    blinkFrame: initialState.blinkFrame ?? (frameCount > 1 ? 1 : 0),
+    activeFrame: 0,
+    displayFrame: -1,
+    fps: 8,
+    isPlaying: false,
+    blinkEnabled: false,
+    blinkMinDelay: 2.6,
+    blinkMaxDelay: 5.2,
+    blinkHoldDuration: 0.12,
+    isBlinking: false,
+    nextBlinkAt: 0,
+    blinkUntil: 0,
+    playbackAccumulator: 0,
+    playbackRow: initialState.playbackRow ?? 0,
+    playbackCursor: 0,
+    baseRepeat: new THREE.Vector2(1, 1),
+    baseOffset: new THREE.Vector2(0, 0),
+    onFrameChange: null,
+  };
+
+  normalizeSpriteState(spriteState, texture);
+  scheduleNextBlink(spriteState);
+  return spriteState;
+};
+
+const getSpritePlaybackFrames = (spriteState) => {
+  if (!spriteState) return [];
+
+  const rowIndex = THREE.MathUtils.clamp(sanitizeInteger(spriteState.playbackRow + 1, 1) - 1, 0, spriteState.rows - 1);
+  const frames = [];
+
+  for (let col = 0; col < spriteState.columns; col += 1) {
+    const frame = rowIndex * spriteState.columns + col;
+    if (frame < spriteState.frameCount) {
+      frames.push(frame);
+    }
+  }
+
+  return frames;
+};
+
+const primeSpriteRowPlayback = (spriteState) => {
+  const frames = getSpritePlaybackFrames(spriteState);
+  if (!frames.length) return;
+
+  spriteState.playbackCursor = 0;
+  spriteState.activeFrame = frames[0];
+};
+
+const bindSpriteState = (material, slotKey, texture, spriteState, { isDefault = false } = {}) => {
+  if (!material || !slotKey || !texture || !spriteState) return null;
+
+  const key = getTextureOverrideKey(material, slotKey);
+  const existingBinding = spriteBindings.get(key);
+  if (existingBinding?.sprite) {
+    existingBinding.sprite.onFrameChange = null;
+  }
+
+  texture.wrapS = THREE.ClampToEdgeWrapping;
+  texture.wrapT = THREE.ClampToEdgeWrapping;
+  spriteBindings.set(key, { texture, sprite: spriteState, isDefault });
+  applySpriteFrameToTexture(texture, spriteState);
+  return spriteState;
+};
+
+const unbindSpriteState = (material, slotKey) => {
+  const key = getTextureOverrideKey(material, slotKey);
+  const binding = spriteBindings.get(key);
+  if (binding?.sprite) {
+    binding.sprite.onFrameChange = null;
+  }
+  spriteBindings.delete(key);
+};
+
+const ensureDefaultFaceSpriteState = (material, slotKey, texture) => {
+  if (!isFaceSpriteTarget(material, slotKey) || !texture) return null;
+
+  const key = getTextureOverrideKey(material, slotKey);
+  const existingBinding = spriteBindings.get(key);
+  if (existingBinding?.texture === texture && existingBinding?.sprite) {
+    return existingBinding.sprite;
+  }
+
+  const spriteState = createSpriteState(texture, getFaceSpriteDefaults(material));
+  bindSpriteState(material, slotKey, texture, spriteState, { isDefault: true });
+  return spriteState;
+};
+
+const bindAsciiState = (material, slotKey, asciiState, { isDefault = false } = {}) => {
+  if (!material || !slotKey || !asciiState?.texture) return null;
+
+  const key = getTextureOverrideKey(material, slotKey);
+  const existingBinding = asciiBindings.get(key);
+  if (existingBinding?.ascii) {
+    existingBinding.ascii.onFrameChange = null;
+  }
+
+  material[slotKey] = asciiState.texture;
+  material.needsUpdate = true;
+  asciiState.texture.wrapS = THREE.ClampToEdgeWrapping;
+  asciiState.texture.wrapT = THREE.ClampToEdgeWrapping;
+  asciiBindings.set(key, {
+    texture: asciiState.texture,
+    sourceTexture: asciiState.texture.userData.asciiSourceTexture ?? null,
+    ascii: asciiState,
+    isDefault,
+  });
+  renderAsciiFrameToTexture(asciiState);
+  return asciiState;
+};
+
+const unbindAsciiState = (material, slotKey) => {
+  const key = getTextureOverrideKey(material, slotKey);
+  const binding = asciiBindings.get(key);
+  if (binding?.ascii) {
+    binding.ascii.onFrameChange = null;
+  }
+  asciiBindings.delete(key);
+};
+
+const ensureDefaultFaceAsciiState = (material, slotKey, sourceTexture) => {
+  if (!isFaceAsciiTarget(material, slotKey) || !sourceTexture) return null;
+
+  const key = getTextureOverrideKey(material, slotKey);
+  const existingBinding = asciiBindings.get(key);
+  if (existingBinding?.sourceTexture === sourceTexture && existingBinding?.ascii) {
+    return existingBinding.ascii;
+  }
+
+  const asciiState = createAsciiState(material, sourceTexture, getFaceAsciiDefaults(material));
+  bindAsciiState(material, slotKey, asciiState, { isDefault: true });
+  return asciiState;
+};
+
+const stepSpriteAnimations = (delta, now = performance.now() * 0.001) => {
+  spriteBindings.forEach((binding) => {
+    const spriteState = binding.sprite;
+    const texture = binding.texture;
+    if (!spriteState || !texture) return;
+
+    normalizeSpriteState(spriteState, texture, { now });
+
+    if (spriteState.isPlaying) {
+      const playbackFrames = getSpritePlaybackFrames(spriteState);
+      if (!playbackFrames.length) return;
+
+      if (!playbackFrames.includes(spriteState.activeFrame)) {
+        primeSpriteRowPlayback(spriteState);
+      }
+
+      spriteState.playbackAccumulator += delta * spriteState.fps;
+
+      while (spriteState.playbackAccumulator >= 1) {
+        spriteState.playbackCursor = (spriteState.playbackCursor + 1) % playbackFrames.length;
+        spriteState.activeFrame = playbackFrames[spriteState.playbackCursor];
+        spriteState.playbackAccumulator -= 1;
+      }
+    } else if (spriteState.blinkEnabled && spriteState.frameCount > 1) {
+      if (!spriteState.isBlinking && now >= spriteState.nextBlinkAt) {
+        spriteState.isBlinking = true;
+        spriteState.blinkUntil = now + spriteState.blinkHoldDuration;
+      } else if (spriteState.isBlinking && now >= spriteState.blinkUntil) {
+        scheduleNextBlink(spriteState, now);
+      }
+    }
+
+    applySpriteFrameToTexture(texture, spriteState);
+  });
+};
+
+const stepAsciiAnimations = (delta, now = performance.now() * 0.001) => {
+  asciiBindings.forEach((binding) => {
+    const asciiState = binding.ascii;
+    if (!asciiState) return;
+
+    normalizeAsciiState(asciiState, { now });
+
+    if (asciiState.isPlaying) {
+      const playbackFrames = getAsciiPlaybackFrames(asciiState);
+      if (!playbackFrames.length) return;
+
+      if (!playbackFrames.includes(asciiState.activeFrame)) {
+        primeAsciiRowPlayback(asciiState);
+      }
+
+      asciiState.playbackAccumulator += delta * asciiState.fps;
+
+      while (asciiState.playbackAccumulator >= 1) {
+        asciiState.playbackCursor = (asciiState.playbackCursor + 1) % playbackFrames.length;
+        asciiState.activeFrame = playbackFrames[asciiState.playbackCursor];
+        asciiState.playbackAccumulator -= 1;
+      }
+    } else if (asciiState.blinkEnabled && asciiState.frameCount > 1) {
+      if (!asciiState.isBlinking && now >= asciiState.nextBlinkAt) {
+        asciiState.isBlinking = true;
+        asciiState.blinkUntil = now + asciiState.blinkHoldDuration;
+      } else if (asciiState.isBlinking && now >= asciiState.blinkUntil) {
+        scheduleNextBlink(asciiState, now);
+      }
+    }
+
+    renderAsciiFrameToTexture(asciiState);
+  });
+};
+
+const ensureDefaultFaceBinding = (material, slotKey, texture) => {
+  if (isFaceAsciiTarget(material, slotKey)) {
+    return ensureDefaultFaceAsciiState(material, slotKey, texture);
+  }
+
+  return ensureDefaultFaceSpriteState(material, slotKey, texture);
+};
+
+const ensureDefaultFaceBindingSafely = (material, slotKey, texture) => {
+  try {
+    return ensureDefaultFaceBinding(material, slotKey, texture);
+  } catch (error) {
+    console.error(`Failed to initialize face binding for ${material?.name || material?.type || slotKey}.`, error);
+    unbindSpriteState(material, slotKey);
+    unbindAsciiState(material, slotKey);
+    if (material && slotKey in material) {
+      material[slotKey] = texture ?? null;
+      material.needsUpdate = true;
+    }
+    return null;
+  }
+};
 
 const copyTextureSettings = (target, source) => {
   if (!target || !source) return;
 
+  target.mapping = source.mapping;
   target.wrapS = source.wrapS;
   target.wrapT = source.wrapT;
   target.magFilter = source.magFilter;
@@ -455,12 +1368,57 @@ const clearTextureOverrides = () => {
     if (record.replacementTexture && record.replacementTexture !== record.originalTexture) {
       disposeTexture(record.replacementTexture);
     }
+    if (record.originalTexture?.userData?.asciiGenerated) {
+      disposeTexture(record.originalTexture);
+      disposeTexture(record.originalTexture.userData.asciiSourceTexture);
+    }
   });
 
   textureOverrides.clear();
 };
 
-const replaceMaterialTexture = async (material, slotKey, file) => {
+const clearSpriteBindings = () => {
+  spriteBindings.forEach((binding) => {
+    if (binding?.sprite) {
+      binding.sprite.onFrameChange = null;
+    }
+  });
+
+  spriteBindings.clear();
+};
+
+const clearAsciiBindings = () => {
+  asciiBindings.forEach((binding) => {
+    if (binding?.ascii) {
+      binding.ascii.onFrameChange = null;
+    }
+
+    disposeTexture(binding?.ascii?.texture);
+    disposeTexture(binding?.sourceTexture);
+  });
+
+  asciiBindings.clear();
+};
+
+const configureFaceOverlayMaterial = (mesh, material) => {
+  if (!mesh || !material || !isFaceOverlayMesh(mesh)) return;
+
+  const layerName = mesh.name.trim().toLowerCase();
+  mesh.renderOrder = FACE_OVERLAY_RENDER_ORDER.get(layerName) ?? 20;
+  mesh.castShadow = false;
+  mesh.receiveShadow = false;
+  mesh.visible = !shouldHideFaceBaseLayer(mesh);
+
+  material.transparent = true;
+  material.alphaTest = Math.max(material.alphaTest ?? 0, 0.01);
+  material.depthWrite = false;
+  material.polygonOffset = true;
+  material.polygonOffsetFactor = -2;
+  material.polygonOffsetUnits = -2;
+  material.needsUpdate = true;
+};
+
+const replaceMaterialTexture = async (material, slotKey, file, { useSprite = false } = {}) => {
   if (!material || !slotKey || !file || !REPLACEABLE_TEXTURE_SLOTS.has(slotKey)) return;
 
   const overrideKey = getTextureOverrideKey(material, slotKey);
@@ -471,20 +1429,29 @@ const replaceMaterialTexture = async (material, slotKey, file) => {
     replacementTexture: null,
     objectUrl: null,
     fileName: null,
+    sprite: null,
   };
   const objectUrl = URL.createObjectURL(file);
   const slotLabel = TEXTURE_LABELS.get(slotKey) ?? slotKey;
+  const sourceTexture = record.originalTexture ?? currentTexture;
 
   try {
-    setStatus(`Updating ${material.name || material.type} ${slotLabel}…`);
+    setStatus(`${useSprite ? 'Preparing sprite sheet' : 'Updating'} ${material.name || material.type} ${slotLabel}…`);
 
     const nextTexture = await textureLoader.loadAsync(objectUrl);
     nextTexture.name = file.name;
-    configureReplacementTexture(nextTexture, slotKey, currentTexture ?? record.originalTexture);
+    configureReplacementTexture(nextTexture, slotKey, sourceTexture);
+
+    let spriteState = null;
+    if (useSprite) {
+      const defaultSpriteState = isFaceSpriteTarget(material, slotKey) ? getFaceSpriteDefaults(material) : {};
+      spriteState = createSpriteState(nextTexture, defaultSpriteState);
+    }
 
     material[slotKey] = nextTexture;
     material.needsUpdate = true;
 
+    unbindSpriteState(material, slotKey);
     if (record.objectUrl) URL.revokeObjectURL(record.objectUrl);
     if (record.replacementTexture && record.replacementTexture !== record.originalTexture) {
       disposeTexture(record.replacementTexture);
@@ -493,10 +1460,20 @@ const replaceMaterialTexture = async (material, slotKey, file) => {
     record.replacementTexture = nextTexture;
     record.objectUrl = objectUrl;
     record.fileName = file.name;
+    record.sprite = spriteState;
     textureOverrides.set(overrideKey, record);
 
+    unbindAsciiState(material, slotKey);
+    if (spriteState) {
+      bindSpriteState(material, slotKey, nextTexture, spriteState);
+    }
+
     renderTextureInspector(modelRoot);
-    setStatus(`Updated ${material.name || material.type} ${slotLabel}.`);
+    setStatus(
+      useSprite
+        ? `Sprite sheet ready on ${material.name || material.type} ${slotLabel}.`
+        : `Updated ${material.name || material.type} ${slotLabel}.`,
+    );
   } catch (error) {
     URL.revokeObjectURL(objectUrl);
     setStatus(`Failed to replace ${slotLabel}: ${error.message}`, true);
@@ -510,8 +1487,11 @@ const resetMaterialTexture = (material, slotKey) => {
   const overrideKey = getTextureOverrideKey(material, slotKey);
   const record = textureOverrides.get(overrideKey);
   if (!record) return;
+  const originalTexture = record.originalTexture ?? null;
 
-  material[slotKey] = record.originalTexture ?? null;
+  unbindSpriteState(material, slotKey);
+  unbindAsciiState(material, slotKey);
+  material[slotKey] = originalTexture;
   material.needsUpdate = true;
 
   if (record.objectUrl) URL.revokeObjectURL(record.objectUrl);
@@ -520,13 +1500,63 @@ const resetMaterialTexture = (material, slotKey) => {
   }
 
   textureOverrides.delete(overrideKey);
+  ensureDefaultFaceBinding(material, slotKey, material[slotKey]);
+  if (originalTexture?.userData?.asciiGenerated && material[slotKey] !== originalTexture) {
+    disposeTexture(originalTexture);
+    disposeTexture(originalTexture.userData.asciiSourceTexture);
+  }
   renderTextureInspector(modelRoot);
 
   const slotLabel = TEXTURE_LABELS.get(slotKey) ?? slotKey;
   setStatus(`Restored ${material.name || material.type} ${slotLabel}.`);
 };
 
-const createTexturePreview = (texture) => {
+const drawTexturePreview = (canvas, texture, spriteState = null) => {
+  const image = getTextureImage(texture);
+  const ctx = canvas.getContext('2d');
+
+  if (!ctx || !image) {
+    throw new Error('Missing drawable source');
+  }
+
+  const sourceWidth = image.naturalWidth ?? image.videoWidth ?? image.displayWidth ?? image.width;
+  const sourceHeight = image.naturalHeight ?? image.videoHeight ?? image.displayHeight ?? image.height;
+
+  if (!sourceWidth || !sourceHeight) {
+    throw new Error('Missing texture dimensions');
+  }
+
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  let sx = 0;
+  let sy = 0;
+  let sw = sourceWidth;
+  let sh = sourceHeight;
+
+  if (spriteState) {
+    normalizeSpriteState(spriteState, texture);
+    const previewFrame = getSpriteVisibleFrame(spriteState);
+    const cellWidth = sourceWidth / spriteState.columns;
+    const cellHeight = sourceHeight / spriteState.rows;
+    const col = previewFrame % spriteState.columns;
+    const row = Math.floor(previewFrame / spriteState.columns);
+
+    sx = col * cellWidth;
+    sy = row * cellHeight;
+    sw = cellWidth;
+    sh = cellHeight;
+  }
+
+  const scale = Math.max(canvas.width / sw, canvas.height / sh);
+  const drawWidth = sw * scale;
+  const drawHeight = sh * scale;
+  const offsetX = (canvas.width - drawWidth) * 0.5;
+  const offsetY = (canvas.height - drawHeight) * 0.5;
+
+  ctx.drawImage(image, sx, sy, sw, sh, offsetX, offsetY, drawWidth, drawHeight);
+};
+
+const createTexturePreview = (texture, spriteState = null) => {
   const thumb = document.createElement('div');
   thumb.className = 'texture-thumb';
 
@@ -535,7 +1565,10 @@ const createTexturePreview = (texture) => {
     const fallback = document.createElement('div');
     fallback.className = 'texture-thumb texture-thumb-fallback';
     fallback.textContent = 'No preview';
-    return fallback;
+    return {
+      element: fallback,
+      refresh: () => {},
+    };
   }
 
   const canvas = document.createElement('canvas');
@@ -543,28 +1576,20 @@ const createTexturePreview = (texture) => {
   canvas.height = 72;
 
   try {
-    const ctx = canvas.getContext('2d');
-    const sourceWidth = image.naturalWidth ?? image.videoWidth ?? image.displayWidth ?? image.width;
-    const sourceHeight = image.naturalHeight ?? image.videoHeight ?? image.displayHeight ?? image.height;
-
-    if (!ctx || !sourceWidth || !sourceHeight) {
-      throw new Error('Missing drawable source');
-    }
-
-    const scale = Math.max(canvas.width / sourceWidth, canvas.height / sourceHeight);
-    const drawWidth = sourceWidth * scale;
-    const drawHeight = sourceHeight * scale;
-    const offsetX = (canvas.width - drawWidth) * 0.5;
-    const offsetY = (canvas.height - drawHeight) * 0.5;
-
-    ctx.drawImage(image, offsetX, offsetY, drawWidth, drawHeight);
+    drawTexturePreview(canvas, texture, spriteState);
     thumb.append(canvas);
-    return thumb;
+    return {
+      element: thumb,
+      refresh: () => drawTexturePreview(canvas, texture, spriteState),
+    };
   } catch (error) {
     const fallback = document.createElement('div');
     fallback.className = 'texture-thumb texture-thumb-fallback';
     fallback.textContent = texture.isCompressedTexture ? 'Compressed texture' : 'Preview unavailable';
-    return fallback;
+    return {
+      element: fallback,
+      refresh: () => {},
+    };
   }
 };
 
@@ -622,24 +1647,48 @@ const collectTextureInspectorData = (root) => {
   };
 };
 
+const initializeDefaultSpriteBindings = (root) => {
+  if (!root) return;
+
+  root.traverse((child) => {
+    if (!child.isMesh || !child.material) return;
+
+    const materials = Array.isArray(child.material) ? child.material : [child.material];
+    materials.forEach((material) => {
+      if (!material) return;
+
+      const texture = material.map ?? null;
+      if (!texture) return;
+
+      ensureDefaultFaceBindingSafely(material, 'map', texture);
+    });
+  });
+};
+
 const renderTextureInspector = (root) => {
   if (!root) {
-    resetTextureInspector('GLB를 로드하면 여기서 머티리얼별 텍스처를 확인할 수 있습니다.');
+    resetTextureInspector('Character asset details will appear here once the workbench finishes loading.');
     return;
   }
 
-  const data = collectTextureInspectorData(root);
+  const rawData = collectTextureInspectorData(root);
+  const data = {
+    ...rawData,
+    materials: rawData.materials.filter((material) => shouldShowMaterialInInspector(material.name)),
+  };
+  data.textureCount = data.materials.reduce((count, material) => count + material.slots.length, 0);
+
   setInspectorSummary({
-    meshes: data.meshCount,
+    meshes: rawData.meshCount,
     materials: data.materials.length,
     textures: data.textureCount,
-    vertices: data.vertexCount,
+    vertices: rawData.vertexCount,
     fileSizeBytes: currentModelFileSizeBytes,
   });
   textureInspectorList.replaceChildren();
 
   if (!data.materials.length) {
-    inspectorEmpty.textContent = '이 모델에는 읽을 수 있는 머티리얼 정보가 없습니다.';
+    inspectorEmpty.textContent = 'Allowed character materials were not found on this asset.';
     inspectorEmpty.hidden = false;
     return;
   }
@@ -696,7 +1745,10 @@ const renderTextureInspector = (root) => {
       const item = document.createElement('article');
       item.className = 'texture-item';
 
-      const preview = createTexturePreview(texture);
+      const asciiState = getAsciiBinding(material.materialRef, key)?.ascii ?? null;
+      const spriteState = getSpriteBinding(material.materialRef, key)?.sprite ?? null;
+      const previewTexture = asciiState?.texture ?? texture;
+      const { element: preview, refresh: refreshPreview } = createTexturePreview(previewTexture, asciiState ? null : spriteState);
 
       const body = document.createElement('div');
       body.className = 'texture-body';
@@ -710,7 +1762,24 @@ const renderTextureInspector = (root) => {
 
       const metaInfo = document.createElement('div');
       metaInfo.className = 'texture-meta';
-      metaInfo.textContent = `${getTextureDimensions(texture)} · ${texture.colorSpace === THREE.SRGBColorSpace ? 'sRGB' : 'Linear'} · ${texture.flipY ? 'FlipY' : 'No FlipY'}`;
+      const refreshTextureMeta = () => {
+        const parts = [
+          getTextureDimensions(texture),
+          texture.colorSpace === THREE.SRGBColorSpace ? 'sRGB' : 'Linear',
+          texture.flipY ? 'FlipY' : 'No FlipY',
+        ];
+
+        if (asciiState) {
+          parts.push(`ASCII ${asciiState.columns} x ${asciiState.rows}`);
+          parts.push(`Frame ${getAsciiVisibleFrame(asciiState) + 1}/${asciiState.frameCount}`);
+        } else if (spriteState) {
+          parts.push(`Sprite ${spriteState.columns} x ${spriteState.rows}`);
+          parts.push(`Frame ${getSpriteVisibleFrame(spriteState) + 1}/${spriteState.frameCount}`);
+        }
+
+        metaInfo.textContent = parts.join(' · ');
+      };
+      refreshTextureMeta();
 
       body.append(slot, name, metaInfo);
 
@@ -723,6 +1792,12 @@ const renderTextureInspector = (root) => {
         replaceBtn.type = 'button';
         replaceBtn.textContent = 'Replace';
 
+        const canUseSprite = SPRITE_REPLACEABLE_TEXTURE_SLOTS.has(key) && !isFaceAsciiTarget(material.materialRef, key);
+        const spriteBtn = document.createElement('button');
+        spriteBtn.className = 'texture-action';
+        spriteBtn.type = 'button';
+        spriteBtn.textContent = spriteState ? 'Swap sprite' : 'Sprite sheet';
+
         const resetBtn = document.createElement('button');
         resetBtn.className = 'texture-action subtle';
         resetBtn.type = 'button';
@@ -733,13 +1808,18 @@ const renderTextureInspector = (root) => {
         fileInput.accept = 'image/*';
         fileInput.hidden = true;
 
+        const spriteInput = document.createElement('input');
+        spriteInput.type = 'file';
+        spriteInput.accept = 'image/*';
+        spriteInput.hidden = true;
+
         const overrideKey = getTextureOverrideKey(material.materialRef, key);
         const isOverridden = textureOverrides.has(overrideKey);
         resetBtn.disabled = !isOverridden;
 
         const state = document.createElement('div');
         state.className = 'texture-state';
-        state.textContent = isOverridden ? 'Custom override' : 'Original';
+        state.textContent = asciiState ? 'ASCII active' : spriteState ? 'Sprite active' : isOverridden ? 'Custom override' : 'Original';
 
         replaceBtn.addEventListener('click', () => fileInput.click());
         fileInput.addEventListener('change', async (event) => {
@@ -753,10 +1833,395 @@ const renderTextureInspector = (root) => {
             console.error(error);
           }
         });
+
+        if (canUseSprite) {
+          spriteBtn.addEventListener('click', () => spriteInput.click());
+          spriteInput.addEventListener('change', async (event) => {
+            const [file] = event.target.files ?? [];
+            event.target.value = '';
+            if (!file) return;
+
+            try {
+              await replaceMaterialTexture(material.materialRef, key, file, { useSprite: true });
+            } catch (error) {
+              console.error(error);
+            }
+          });
+        } else {
+          spriteBtn.disabled = true;
+        }
+
         resetBtn.addEventListener('click', () => resetMaterialTexture(material.materialRef, key));
 
-        actionRow.append(replaceBtn, resetBtn, state, fileInput);
+        actionRow.append(replaceBtn);
+        if (canUseSprite) actionRow.append(spriteBtn);
+        actionRow.append(resetBtn, state, fileInput, spriteInput);
         body.append(actionRow);
+
+        const createNumberField = ({ label: fieldLabel, min = 1, max = null, step = 1, value = 1 }) => {
+          const field = document.createElement('label');
+          field.className = 'sprite-field';
+
+          const caption = document.createElement('span');
+          caption.textContent = fieldLabel;
+
+          const input = document.createElement('input');
+          input.className = 'sprite-input';
+          input.type = 'number';
+          input.min = String(min);
+          input.step = String(step);
+          if (max !== null) input.max = String(max);
+          input.value = String(value);
+
+          field.append(caption, input);
+          return { field, input };
+        };
+
+        if (asciiState) {
+          const asciiPanel = document.createElement('div');
+          asciiPanel.className = 'sprite-panel';
+
+          const panelTitle = document.createElement('div');
+          panelTitle.className = 'sprite-title';
+          panelTitle.textContent = 'ASCII Eyes';
+
+          const panelSub = document.createElement('div');
+          panelSub.className = 'sprite-sub';
+          panelSub.textContent = 'Generated live from a text grid. Frames still run left to right, top to bottom.';
+
+          const fields = document.createElement('div');
+          fields.className = 'sprite-grid';
+
+          const framesField = createNumberField({
+            label: 'Frames',
+            value: asciiState.frameCount,
+            max: asciiState.columns * asciiState.rows,
+          });
+          const expressionField = createNumberField({
+            label: 'Expression',
+            value: asciiState.expressionFrame + 1,
+            max: asciiState.frameCount,
+          });
+          const playbackRowField = createNumberField({
+            label: 'Play Row',
+            value: asciiState.playbackRow + 1,
+            max: asciiState.rows,
+          });
+          const blinkField = createNumberField({
+            label: 'Blink',
+            value: asciiState.blinkFrame + 1,
+            max: asciiState.frameCount,
+          });
+          const fpsField = createNumberField({ label: 'FPS', value: asciiState.fps, min: 1, max: 60, step: 0.5 });
+
+          fields.append(framesField.field, expressionField.field, playbackRowField.field, blinkField.field, fpsField.field);
+
+          const asciiPreview = document.createElement('pre');
+          asciiPreview.className = 'ascii-preview';
+
+          const spriteControls = document.createElement('div');
+          spriteControls.className = 'sprite-controls';
+
+          const blinkToggle = document.createElement('label');
+          blinkToggle.className = 'sprite-toggle';
+
+          const blinkCheckbox = document.createElement('input');
+          blinkCheckbox.type = 'checkbox';
+          blinkCheckbox.checked = asciiState.blinkEnabled;
+
+          const blinkLabel = document.createElement('span');
+          blinkLabel.textContent = 'Auto blink';
+
+          blinkToggle.append(blinkCheckbox, blinkLabel);
+
+          const playBtn = document.createElement('button');
+          playBtn.className = 'texture-action';
+          playBtn.type = 'button';
+
+          const playAllBtn = document.createElement('button');
+          playAllBtn.className = 'texture-action';
+          playAllBtn.type = 'button';
+
+          const frameState = document.createElement('div');
+          frameState.className = 'texture-state';
+
+          const refreshAsciiPanel = () => {
+            normalizeAsciiState(asciiState);
+            framesField.input.max = String(asciiState.columns * asciiState.rows);
+            framesField.input.value = String(asciiState.frameCount);
+            expressionField.input.max = String(asciiState.frameCount);
+            expressionField.input.value = String(asciiState.expressionFrame + 1);
+            expressionField.input.disabled = asciiState.isPlaying;
+            playbackRowField.input.max = String(asciiState.rows);
+            playbackRowField.input.value = String(Math.min(asciiState.playbackRow + 1, asciiState.rows));
+            playbackRowField.input.disabled = asciiState.frameCount <= 1;
+            blinkField.input.max = String(asciiState.frameCount);
+            blinkField.input.value = String(asciiState.blinkFrame + 1);
+            blinkField.input.disabled = !asciiState.blinkEnabled || asciiState.isPlaying || asciiState.frameCount <= 1;
+            fpsField.input.value = String(asciiState.fps);
+            fpsField.input.disabled = asciiState.frameCount <= 1;
+            blinkCheckbox.checked = asciiState.blinkEnabled;
+            blinkCheckbox.disabled = asciiState.isPlaying || asciiState.frameCount <= 1;
+            playBtn.disabled = asciiState.frameCount <= 1;
+            playAllBtn.disabled = asciiState.frameCount <= 1;
+            playBtn.textContent = asciiState.isPlaying && asciiState.playbackMode === 'row' ? 'Pause row' : 'Play row';
+            playAllBtn.textContent = asciiState.isPlaying && asciiState.playbackMode === 'sequence' ? 'Pause all' : 'Play all';
+            frameState.textContent =
+              asciiState.playbackMode === 'sequence' && asciiState.isPlaying
+                ? `All · Frame ${getAsciiVisibleFrame(asciiState) + 1} / ${asciiState.frameCount}`
+                : `Row ${asciiState.playbackRow + 1} · Frame ${getAsciiVisibleFrame(asciiState) + 1} / ${asciiState.frameCount}`;
+            asciiPreview.textContent = asciiState.currentFrameText || asciiState.frames[getAsciiVisibleFrame(asciiState)] || '';
+            refreshTextureMeta();
+            refreshPreview();
+          };
+
+          const commitAsciiChanges = ({ announce = false } = {}) => {
+            asciiState.frameCount = framesField.input.value;
+            asciiState.expressionFrame = Number(expressionField.input.value) - 1;
+            asciiState.playbackRow = Number(playbackRowField.input.value) - 1;
+            asciiState.blinkFrame = Number(blinkField.input.value) - 1;
+            asciiState.fps = fpsField.input.value;
+            normalizeAsciiState(asciiState);
+            if (asciiState.isPlaying) {
+              primeAsciiRowPlayback(asciiState);
+            }
+            renderAsciiFrameToTexture(asciiState);
+            refreshAsciiPanel();
+
+            if (announce) {
+              setStatus(`ASCII eyes updated for ${material.name || material.type} ${label}.`);
+            }
+          };
+
+          asciiState.onFrameChange = refreshAsciiPanel;
+
+          [framesField.input, expressionField.input, playbackRowField.input, blinkField.input, fpsField.input].forEach((input) => {
+            input.addEventListener('change', () => commitAsciiChanges({ announce: true }));
+          });
+
+          blinkCheckbox.addEventListener('change', () => {
+            asciiState.blinkEnabled = blinkCheckbox.checked;
+            scheduleNextBlink(asciiState);
+            renderAsciiFrameToTexture(asciiState);
+            refreshAsciiPanel();
+            setStatus(
+              asciiState.blinkEnabled
+                ? `Auto blink enabled for ${material.name || material.type} ${label}.`
+                : `Auto blink disabled for ${material.name || material.type} ${label}.`,
+            );
+          });
+
+          playBtn.addEventListener('click', () => {
+            const shouldStartRow = !asciiState.isPlaying || asciiState.playbackMode !== 'row';
+            asciiState.playbackMode = 'row';
+            asciiState.isPlaying = shouldStartRow;
+            asciiState.playbackAccumulator = 0;
+            if (asciiState.isPlaying) {
+              primeAsciiRowPlayback(asciiState);
+            } else {
+              asciiState.activeFrame = asciiState.expressionFrame;
+              scheduleNextBlink(asciiState);
+            }
+            renderAsciiFrameToTexture(asciiState);
+            refreshAsciiPanel();
+            setStatus(
+              asciiState.isPlaying
+                ? `ASCII row ${asciiState.playbackRow + 1} playing on ${material.name || material.type} ${label}.`
+                : `ASCII row playback paused on ${material.name || material.type} ${label}.`,
+            );
+          });
+
+          playAllBtn.addEventListener('click', () => {
+            const shouldStartSequence = !asciiState.isPlaying || asciiState.playbackMode !== 'sequence';
+            asciiState.playbackMode = 'sequence';
+            asciiState.isPlaying = shouldStartSequence;
+            asciiState.playbackAccumulator = 0;
+            if (asciiState.isPlaying) {
+              primeAsciiRowPlayback(asciiState);
+            } else {
+              asciiState.activeFrame = asciiState.expressionFrame;
+              scheduleNextBlink(asciiState);
+            }
+            renderAsciiFrameToTexture(asciiState);
+            refreshAsciiPanel();
+            setStatus(
+              asciiState.isPlaying
+                ? `ASCII sequence playing on ${material.name || material.type} ${label}.`
+                : `ASCII sequence playback paused on ${material.name || material.type} ${label}.`,
+            );
+          });
+
+          spriteControls.append(blinkToggle, playBtn, playAllBtn, frameState);
+          asciiPanel.append(panelTitle, panelSub, fields, asciiPreview, spriteControls);
+          body.append(asciiPanel);
+          refreshAsciiPanel();
+        } else if (spriteState) {
+          const spritePanel = document.createElement('div');
+          spritePanel.className = 'sprite-panel';
+
+          const panelTitle = document.createElement('div');
+          panelTitle.className = 'sprite-title';
+          panelTitle.textContent = 'Face Sprite';
+
+          const panelSub = document.createElement('div');
+          panelSub.className = 'sprite-sub';
+          panelSub.textContent = 'Frames run left to right, top to bottom. Expression frame is the resting face.';
+
+          const fields = document.createElement('div');
+          fields.className = 'sprite-grid';
+
+          const columnsField = createNumberField({ label: 'Cols', value: spriteState.columns, max: 16 });
+          const rowsField = createNumberField({ label: 'Rows', value: spriteState.rows, max: 16 });
+          const framesField = createNumberField({
+            label: 'Frames',
+            value: spriteState.frameCount,
+            max: spriteState.columns * spriteState.rows,
+          });
+          const expressionField = createNumberField({
+            label: 'Expression',
+            value: spriteState.expressionFrame + 1,
+            max: spriteState.frameCount,
+          });
+          const playbackRowField = createNumberField({
+            label: 'Play Row',
+            value: spriteState.playbackRow + 1,
+            max: spriteState.rows,
+          });
+          const blinkField = createNumberField({
+            label: 'Blink',
+            value: spriteState.blinkFrame + 1,
+            max: spriteState.frameCount,
+          });
+          const fpsField = createNumberField({ label: 'FPS', value: spriteState.fps, min: 1, max: 60, step: 0.5 });
+
+          fields.append(
+            columnsField.field,
+            rowsField.field,
+            framesField.field,
+            expressionField.field,
+            playbackRowField.field,
+            blinkField.field,
+            fpsField.field,
+          );
+
+          const spriteControls = document.createElement('div');
+          spriteControls.className = 'sprite-controls';
+
+          const blinkToggle = document.createElement('label');
+          blinkToggle.className = 'sprite-toggle';
+
+          const blinkCheckbox = document.createElement('input');
+          blinkCheckbox.type = 'checkbox';
+          blinkCheckbox.checked = spriteState.blinkEnabled;
+
+          const blinkLabel = document.createElement('span');
+          blinkLabel.textContent = 'Auto blink';
+
+          blinkToggle.append(blinkCheckbox, blinkLabel);
+
+          const playBtn = document.createElement('button');
+          playBtn.className = 'texture-action';
+          playBtn.type = 'button';
+
+          const frameState = document.createElement('div');
+          frameState.className = 'texture-state';
+
+          const refreshSpritePanel = () => {
+            normalizeSpriteState(spriteState, texture);
+            columnsField.input.value = String(spriteState.columns);
+            rowsField.input.value = String(spriteState.rows);
+            framesField.input.max = String(spriteState.columns * spriteState.rows);
+            framesField.input.value = String(spriteState.frameCount);
+            expressionField.input.max = String(spriteState.frameCount);
+            expressionField.input.value = String(spriteState.expressionFrame + 1);
+            expressionField.input.disabled = spriteState.isPlaying;
+            playbackRowField.input.max = String(spriteState.rows);
+            playbackRowField.input.value = String(Math.min(spriteState.playbackRow + 1, spriteState.rows));
+            playbackRowField.input.disabled = spriteState.frameCount <= 1;
+            blinkField.input.max = String(spriteState.frameCount);
+            blinkField.input.value = String(spriteState.blinkFrame + 1);
+            blinkField.input.disabled = !spriteState.blinkEnabled || spriteState.isPlaying || spriteState.frameCount <= 1;
+            fpsField.input.value = String(spriteState.fps);
+            fpsField.input.disabled = spriteState.frameCount <= 1;
+            blinkCheckbox.checked = spriteState.blinkEnabled;
+            blinkCheckbox.disabled = spriteState.isPlaying || spriteState.frameCount <= 1;
+            playBtn.disabled = spriteState.frameCount <= 1;
+            playBtn.textContent = spriteState.isPlaying ? 'Pause row' : 'Play row';
+            frameState.textContent = `Row ${spriteState.playbackRow + 1} · Frame ${getSpriteVisibleFrame(spriteState) + 1} / ${spriteState.frameCount}`;
+            refreshTextureMeta();
+            refreshPreview();
+          };
+
+          const commitSpriteChanges = ({ announce = false } = {}) => {
+            spriteState.columns = columnsField.input.value;
+            spriteState.rows = rowsField.input.value;
+            spriteState.frameCount = framesField.input.value;
+            spriteState.expressionFrame = Number(expressionField.input.value) - 1;
+            spriteState.playbackRow = Number(playbackRowField.input.value) - 1;
+            spriteState.blinkFrame = Number(blinkField.input.value) - 1;
+            spriteState.fps = fpsField.input.value;
+            normalizeSpriteState(spriteState, texture);
+            spriteState.playbackRow = THREE.MathUtils.clamp(spriteState.playbackRow, 0, Math.max(0, spriteState.rows - 1));
+            if (spriteState.isPlaying) {
+              primeSpriteRowPlayback(spriteState);
+            }
+            applySpriteFrameToTexture(texture, spriteState);
+            refreshSpritePanel();
+
+            if (announce) {
+              setStatus(`Sprite updated for ${material.name || material.type} ${label}.`);
+            }
+          };
+
+          spriteState.onFrameChange = refreshSpritePanel;
+
+          [
+            columnsField.input,
+            rowsField.input,
+            framesField.input,
+            expressionField.input,
+            playbackRowField.input,
+            blinkField.input,
+            fpsField.input,
+          ].forEach((input) => {
+            input.addEventListener('change', () => commitSpriteChanges({ announce: true }));
+          });
+
+          blinkCheckbox.addEventListener('change', () => {
+            spriteState.blinkEnabled = blinkCheckbox.checked;
+            scheduleNextBlink(spriteState);
+            applySpriteFrameToTexture(texture, spriteState);
+            refreshSpritePanel();
+            setStatus(
+              spriteState.blinkEnabled
+                ? `Auto blink enabled for ${material.name || material.type} ${label}.`
+                : `Auto blink disabled for ${material.name || material.type} ${label}.`,
+            );
+          });
+
+          playBtn.addEventListener('click', () => {
+            spriteState.isPlaying = !spriteState.isPlaying;
+            spriteState.playbackAccumulator = 0;
+            if (spriteState.isPlaying) {
+              primeSpriteRowPlayback(spriteState);
+            } else {
+              spriteState.activeFrame = spriteState.expressionFrame;
+              scheduleNextBlink(spriteState);
+            }
+            applySpriteFrameToTexture(texture, spriteState);
+            refreshSpritePanel();
+            setStatus(
+              spriteState.isPlaying
+                ? `Sprite row ${spriteState.playbackRow + 1} playing on ${material.name || material.type} ${label}.`
+                : `Sprite row playback paused on ${material.name || material.type} ${label}.`,
+            );
+          });
+
+          spriteControls.append(blinkToggle, playBtn, frameState);
+          spritePanel.append(panelTitle, panelSub, fields, spriteControls);
+          body.append(spritePanel);
+          refreshSpritePanel();
+        }
       }
 
       item.append(preview, body);
@@ -804,6 +2269,11 @@ const applyShadowState = (enabled) => {
 
   modelRoot.traverse((child) => {
     if (!child.isMesh) return;
+    if (isFaceOverlayMesh(child)) {
+      child.castShadow = false;
+      child.receiveShadow = false;
+      return;
+    }
     child.castShadow = enabled;
     child.receiveShadow = enabled;
   });
@@ -898,6 +2368,8 @@ const clearCurrentModel = ({ preserveFileSize = false } = {}) => {
     return;
   }
 
+  clearSpriteBindings();
+  clearAsciiBindings();
   clearTextureOverrides();
   scene.remove(modelRoot);
   modelRoot.traverse((child) => {
@@ -955,7 +2427,30 @@ const resolveAndApplyModelFileSize = async (url) => {
 };
 
 const setBackgroundState = () => {
-  scene.background = bgToggle.checked && envTexture ? envTexture : FLAT_BACKGROUND;
+  scene.background = FLAT_BACKGROUND;
+  syncBackgroundControls();
+};
+
+const syncBackgroundControls = () => {
+  const flatHex = getFlatBackgroundHex();
+
+  backgroundSwatches.forEach((button) => {
+    const swatchHex = button.dataset.backgroundColor?.toLowerCase();
+    const isActive = swatchHex === flatHex;
+    button.classList.toggle('is-active', isActive);
+    button.setAttribute('aria-pressed', isActive ? 'true' : 'false');
+  });
+};
+
+const setFlatBackgroundColor = (value, { announce = true } = {}) => {
+  if (typeof value !== 'string' || !value.trim()) return;
+
+  FLAT_BACKGROUND.set(value);
+  setBackgroundState();
+
+  if (announce) {
+    setStatus(`Background color updated: ${getFlatBackgroundHex().toUpperCase()}.`);
+  }
 };
 
 const ensureStudioEnvironment = () => {
@@ -975,32 +2470,41 @@ const setEnvironmentTexture = (texture) => {
 };
 
 const applyEnvironmentPreset = (mode = currentEnvironmentPreset, { announce = true } = {}) => {
-  currentEnvironmentPreset = mode;
+  try {
+    currentEnvironmentPreset = mode;
 
-  if (mode === 'none') {
-    setEnvironmentTexture(null);
-    if (announce) setStatus('Environment disabled.');
-    return;
-  }
-
-  if (mode === 'hdr-file') {
-    if (!hdrEnvTexture) {
-      currentEnvironmentPreset = 'studio';
-      setEnvironmentTexture(ensureStudioEnvironment());
-      if (announce) setStatus('No HDRI loaded yet. Using procedural studio environment.');
+    if (mode === 'none') {
+      setEnvironmentTexture(null);
+      if (announce) setStatus('Environment disabled.');
       return;
     }
 
-    setEnvironmentTexture(hdrEnvTexture);
-    if (announce) setStatus(`Environment updated: ${hdrFileName.textContent}`);
-    return;
-  }
+    if (mode === 'hdr-file') {
+      if (!hdrEnvTexture) {
+        currentEnvironmentPreset = 'studio';
+        setEnvironmentTexture(ensureStudioEnvironment());
+        if (announce) setStatus('No HDRI loaded yet. Using procedural studio environment.');
+        return;
+      }
 
-  setEnvironmentTexture(ensureStudioEnvironment());
-  if (announce) setStatus('Procedural studio environment ready.');
+      setEnvironmentTexture(hdrEnvTexture);
+      if (announce) setStatus(`Environment updated: ${hdrFileName.textContent}`);
+      return;
+    }
+
+    setEnvironmentTexture(ensureStudioEnvironment());
+    if (announce) setStatus('Procedural studio environment ready.');
+  } catch (error) {
+    console.warn('Failed to apply environment preset.', error);
+    currentEnvironmentPreset = 'none';
+    setEnvironmentTexture(null);
+    if (announce) {
+      setStatus('Environment disabled after setup failure.', true);
+    }
+  }
 };
 
-const loadModel = async (url = currentModelUrl) => {
+const loadModel = async (url = currentModelUrl, { progressLabel = 'Loading character asset…' } = {}) => {
   clearCurrentModel({ preserveFileSize: true });
 
   const gltf = await new Promise((resolve, reject) => {
@@ -1011,7 +2515,7 @@ const loadModel = async (url = currentModelUrl) => {
         if ((!Number.isFinite(currentModelFileSizeBytes) || currentModelFileSizeBytes <= 0) && event.total > 0) {
           currentModelFileSizeBytes = event.total;
         }
-        updateProgress(event.loaded, event.total, 'Loading model…');
+        updateProgress(event.loaded, event.total, progressLabel);
       },
       reject,
     );
@@ -1023,19 +2527,26 @@ const loadModel = async (url = currentModelUrl) => {
     child.castShadow = true;
     child.receiveShadow = true;
     child.frustumCulled = true;
-    if (child.material) child.material.needsUpdate = true;
+    if (!child.material) return;
+
+    const materials = Array.isArray(child.material) ? child.material : [child.material];
+    materials.forEach((material) => {
+      configureFaceOverlayMaterial(child, material);
+      material.needsUpdate = true;
+    });
   });
 
   scene.add(modelRoot);
   frameModel(modelRoot);
   applyShadowState(shadowToggle.checked);
+  initializeDefaultSpriteBindings(modelRoot);
   renderTextureInspector(modelRoot);
 
   hasAnimations = Boolean(gltf.animations?.length);
-  isAnimationPlaying = hasAnimations;
+  isAnimationPlaying = false;
   animationClips = gltf.animations ? [...gltf.animations] : [];
   animationActions = [];
-  currentAnimationIndex = hasAnimations ? 0 : -1;
+  currentAnimationIndex = hasAnimations ? getDefaultAnimationIndex(animationClips) : -1;
 
   if (hasAnimations) {
     mixer = new THREE.AnimationMixer(modelRoot);
@@ -1045,49 +2556,50 @@ const loadModel = async (url = currentModelUrl) => {
       action.enabled = false;
       return action;
     });
-    setActiveAnimation(0);
+    setActiveAnimation(currentAnimationIndex);
   }
 
   syncAnimationControl();
 };
 
+const loadWorkbenchCharacter = async ({ bustCache = false, progressLabel = 'Loading character asset…' } = {}) => {
+  currentModelUrl = buildCharacterAssetUrl({ bustCache });
+  currentModelFileSizeBytes = null;
+  modelFileName.textContent = CHARACTER_ASSET_LABEL;
+
+  await loadModel(currentModelUrl, { progressLabel });
+  progressEl.value = 100;
+  resolveAndApplyModelFileSize(currentModelUrl);
+};
+
 const bootWithDefaults = async () => {
-  resetTextureInspector();
-  updateLightTargets();
-  applyLightingPreset(currentLightingPreset);
-  applyEnvironmentPreset(currentEnvironmentPreset, { announce: false });
-  setGamma(VIEWER_DEFAULTS.gamma);
-
-  if (isFileProtocol) {
-    currentModelFileSizeBytes = null;
-    progressEl.value = 0;
-    setStatus('Open this viewer through a local server, or choose a .glb file manually.', true);
-    dropzone.classList.remove('hidden');
-    modelFileName.textContent = 'none';
-    return;
-  }
-
   try {
-    await loadModel(DEFAULT_MODEL_URL);
-    resolveAndApplyModelFileSize(DEFAULT_MODEL_URL);
-    modelFileName.textContent = 'assets/260406_daymo_motion.glb';
-    progressEl.value = 100;
-    setStatus(`${LIGHTING_PRESETS[currentLightingPreset].label} ready.`);
+    resetTextureInspector();
+    updateLightTargets();
+    applyLightingPreset(currentLightingPreset);
+    applyEnvironmentPreset(currentEnvironmentPreset, { announce: false });
+    setGamma(VIEWER_DEFAULTS.gamma);
+    modelFileName.textContent = CHARACTER_ASSET_LABEL;
+    setStatus('Preparing character workbench…');
+
+    if (isFileProtocol) {
+      currentModelFileSizeBytes = null;
+      progressEl.value = 0;
+      setStatus('Open this workbench through a local server so the character asset can load.', true);
+      return;
+    }
+
+    await loadWorkbenchCharacter();
+    setStatus(`Character workbench ready. ${LIGHTING_PRESETS[currentLightingPreset].label} active.`);
   } catch (error) {
     console.warn(error);
     currentModelFileSizeBytes = null;
     progressEl.value = 0;
-    setStatus('No default GLB found. Drop a model to start.');
-    dropzone.classList.remove('hidden');
+    setStatus(`Failed to initialize workbench: ${error.message}`, true);
   }
 };
 
 const revokeObjectUrl = (key) => {
-  if (key === 'model' && currentModelObjectUrl) {
-    URL.revokeObjectURL(currentModelObjectUrl);
-    currentModelObjectUrl = null;
-  }
-
   if (key === 'hdr' && currentHdrObjectUrl) {
     URL.revokeObjectURL(currentHdrObjectUrl);
     currentHdrObjectUrl = null;
@@ -1110,28 +2622,6 @@ const loadEnvironmentFromFile = async (file) => {
   setEnvironmentTexture(hdrEnvTexture);
 };
 
-const handleModelFile = async (file) => {
-  if (!file) return;
-
-  revokeObjectUrl('model');
-  currentModelObjectUrl = URL.createObjectURL(file);
-  currentModelUrl = currentModelObjectUrl;
-  currentModelFileSizeBytes = file.size;
-  modelFileName.textContent = file.name;
-
-  try {
-    await loadModel(currentModelUrl);
-    progressEl.value = 100;
-    setStatus(`Loaded ${file.name}`);
-    dropzone.classList.add('hidden');
-  } catch (error) {
-    console.error(error);
-    currentModelFileSizeBytes = null;
-    progressEl.value = 0;
-    setStatus(`Failed to load model: ${error.message}`, true);
-  }
-};
-
 const handleHdrFile = async (file) => {
   if (!file) return;
 
@@ -1148,20 +2638,13 @@ const handleHdrFile = async (file) => {
   }
 };
 
-const handleFiles = async (files) => {
-  const list = [...files];
-  const model = list.find((file) => file.name.toLowerCase().endsWith('.glb'));
-  const hdr = list.find((file) => /\.(hdr|exr)$/i.test(file.name));
-
-  if (hdr) await handleHdrFile(hdr);
-  if (model) await handleModelFile(model);
-};
-
 const animate = () => {
   requestAnimationFrame(animate);
   const delta = clock.getDelta();
 
   if (mixer) mixer.update(delta);
+  stepSpriteAnimations(delta);
+  stepAsciiAnimations(delta);
 
   controls.update();
   composer.render();
@@ -1182,38 +2665,31 @@ animationSelect.addEventListener('change', (event) => {
   setActiveAnimation(nextIndex);
   setStatus(`Animation selected: ${getAnimationLabel(animationClips[nextIndex], nextIndex)}.`);
 });
-bgToggle.addEventListener('change', setBackgroundState);
+backgroundSwatches.forEach((button) => {
+  button.addEventListener('click', () => {
+    const nextColor = button.dataset.backgroundColor;
+    if (!nextColor) return;
+    setFlatBackgroundColor(nextColor);
+  });
+});
 shadowToggle.addEventListener('change', () => applyShadowState(shadowToggle.checked));
 autoRotateToggle.addEventListener('change', () => {
   controls.autoRotate = autoRotateToggle.checked;
 });
 resetCameraBtn.addEventListener('click', resetCamera);
-clearModelBtn.addEventListener('click', () => {
-  clearCurrentModel();
-  modelFileName.textContent = 'none';
-  progressEl.value = 0;
-  dropzone.classList.remove('hidden');
-  setStatus('Model cleared. Drop another .glb file.');
+reloadCharacterBtn.addEventListener('click', async () => {
+  try {
+    setStatus('Reloading latest character asset…');
+    await loadWorkbenchCharacter({ bustCache: true, progressLabel: 'Reloading character asset…' });
+    setStatus(`Character reloaded from ${CHARACTER_ASSET_LABEL}.`);
+  } catch (error) {
+    console.error(error);
+    currentModelFileSizeBytes = null;
+    progressEl.value = 0;
+    setStatus(`Failed to reload character asset: ${error.message}`, true);
+  }
 });
-modelInput.addEventListener('change', async (event) => handleModelFile(event.target.files?.[0]));
 hdrInput.addEventListener('change', async (event) => handleHdrFile(event.target.files?.[0]));
-
-['dragenter', 'dragover'].forEach((type) => {
-  window.addEventListener(type, (event) => {
-    event.preventDefault();
-    dropzone.classList.add('dragover');
-  });
-});
-['dragleave', 'dragend'].forEach((type) => {
-  window.addEventListener(type, () => dropzone.classList.remove('dragover'));
-});
-window.addEventListener('drop', async (event) => {
-  event.preventDefault();
-  dropzone.classList.remove('dragover');
-  if (event.dataTransfer?.files?.length) await handleFiles(event.dataTransfer.files);
-});
-
-dropzone.addEventListener('dragover', (event) => event.preventDefault());
 window.addEventListener('resize', () => {
   camera.aspect = viewport.clientWidth / viewport.clientHeight;
   camera.updateProjectionMatrix();

@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link rel="icon" type="image/png" href="./favicon.png" />
-    <title>GLB Viewer</title>
+    <title>Character Workbench</title>
     <style>
       :root {
         color-scheme: dark;
@@ -121,6 +121,42 @@
         direction: rtl;
         text-align: right;
       }
+      .file-meta {
+        display: grid;
+        gap: 8px;
+        margin-top: 12px;
+      }
+      .file-meta-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 10px;
+        padding: 0 2px;
+        font-size: 11px;
+      }
+      .file-meta-label {
+        color: var(--muted);
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+      }
+      .file-meta-value {
+        min-width: 0;
+        color: rgba(243, 245, 247, 0.84);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        text-align: right;
+      }
+      .workbench-note {
+        margin-top: 10px;
+        padding: 10px 12px;
+        border-radius: 10px;
+        border: 1px solid rgba(122,162,255,0.16);
+        background: rgba(122,162,255,0.08);
+        color: var(--muted);
+        font-size: 11px;
+        line-height: 1.6;
+      }
 
       /* Progress + status */
       .progress {
@@ -135,6 +171,15 @@
       .progress::-webkit-progress-value { background: linear-gradient(90deg, #6ea8fe, #9a7cff); }
       .status { color: var(--muted); font-size: 12px; }
       .error { color: var(--danger) !important; }
+      .status-card {
+        display: grid;
+        gap: 6px;
+        margin-top: 14px;
+        padding: 12px;
+        border-radius: 12px;
+        border: 1px solid rgba(255,255,255,0.07);
+        background: linear-gradient(180deg, rgba(255,255,255,0.045), rgba(255,255,255,0.02));
+      }
 
       /* Controls */
       .controls { display: grid; gap: 14px; padding: 16px; }
@@ -233,9 +278,40 @@
         width: 100%;
         accent-color: var(--accent);
       }
-
       .btn-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
       .btn-stack { display: grid; gap: 8px; }
+      .scene-control {
+        padding: 12px;
+        border-radius: 12px;
+        border: 1px solid rgba(255,255,255,0.08);
+        background: linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.02));
+      }
+      .background-swatch-row {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 8px;
+      }
+      .background-swatch {
+        width: 100%;
+        aspect-ratio: 1;
+        border-radius: 10px;
+        border: 1px solid rgba(255,255,255,0.12);
+        box-shadow: inset 0 1px 0 rgba(255,255,255,0.12);
+        cursor: pointer;
+        transition: transform 140ms ease, border-color 140ms ease, box-shadow 140ms ease, opacity 140ms ease;
+      }
+      .background-swatch:hover:not(:disabled) {
+        transform: translateY(-1px);
+        border-color: rgba(255,255,255,0.28);
+      }
+      .background-swatch.is-active {
+        border-color: rgba(122,162,255,0.7);
+        box-shadow: 0 0 0 2px rgba(122,162,255,0.18), inset 0 1px 0 rgba(255,255,255,0.22);
+      }
+      .background-swatch:disabled {
+        opacity: 0.45;
+        cursor: not-allowed;
+      }
 
       .inspector-head {
         padding: 18px 16px 12px;
@@ -400,6 +476,85 @@
         letter-spacing: 0.04em;
         text-transform: uppercase;
       }
+      .sprite-panel {
+        display: grid;
+        gap: 10px;
+        margin-top: 10px;
+        padding: 10px;
+        border: 1px solid rgba(122,162,255,0.18);
+        border-radius: 12px;
+        background:
+          radial-gradient(circle at top right, rgba(122,162,255,0.16), transparent 46%),
+          linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.03));
+      }
+      .sprite-title {
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+      .sprite-sub {
+        color: var(--muted);
+        font-size: 11px;
+        line-height: 1.5;
+      }
+      .sprite-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 8px;
+      }
+      .sprite-field {
+        display: grid;
+        gap: 5px;
+      }
+      .sprite-field span {
+        color: var(--muted);
+        font-size: 10px;
+        letter-spacing: 0.05em;
+        text-transform: uppercase;
+      }
+      .sprite-input {
+        width: 100%;
+        border: 1px solid rgba(255,255,255,0.12);
+        background: rgba(7, 10, 15, 0.6);
+        color: var(--text);
+        border-radius: 8px;
+        padding: 8px 9px;
+        font-size: 12px;
+        font-family: inherit;
+      }
+      .sprite-input:focus {
+        outline: none;
+        border-color: rgba(122,162,255,0.55);
+        box-shadow: 0 0 0 3px rgba(122,162,255,0.14);
+      }
+      .sprite-controls {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+      .sprite-toggle {
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        color: var(--text);
+        font-size: 11px;
+        cursor: pointer;
+      }
+      .ascii-preview {
+        margin: 0;
+        padding: 10px 12px;
+        border-radius: 10px;
+        border: 1px solid rgba(255,255,255,0.08);
+        background: rgba(7, 10, 15, 0.72);
+        color: var(--text);
+        font-size: 11px;
+        line-height: 1.2;
+        font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+        white-space: pre;
+        overflow: auto;
+      }
       .pill-row {
         display: flex;
         flex-wrap: wrap;
@@ -414,32 +569,6 @@
         color: var(--muted);
         font-size: 10px;
       }
-
-      /* ── Viewport overlays ── */
-      .dropzone {
-        position: absolute;
-        inset: 0;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        background: rgba(5, 7, 10, 0.5);
-        backdrop-filter: blur(8px);
-        z-index: 8;
-        transition: opacity 160ms ease;
-        pointer-events: auto;
-      }
-      .dropzone.hidden { opacity: 0; pointer-events: none; }
-      .dropzone.dragover { background: rgba(60, 88, 148, 0.22); }
-      .drop-inner { text-align: center; }
-      .drop-title { font-size: 18px; font-weight: 700; margin-bottom: 8px; }
-      .drop-desc { color: var(--muted); font-size: 13px; line-height: 1.6; }
-      .drop-border {
-        border: 1.5px dashed rgba(255,255,255,0.2);
-        border-radius: 20px;
-        padding: 48px 40px;
-        transition: border-color 160ms;
-      }
-      .dragover .drop-border { border-color: rgba(122,162,255,0.8); }
 
       .hint {
         position: absolute;
@@ -464,36 +593,46 @@
       <!-- ── Left sidebar ── -->
       <aside id="sidebar">
         <div class="sb-section">
-          <div class="sb-title">GLB Viewer</div>
-          <div class="sb-sub">Three.js · GLTFLoader · RGBELoader</div>
+          <div class="sb-title">Character Workbench</div>
+          <div class="sb-sub">Single asset review · texture swaps · live ASCII eyes</div>
         </div>
 
         <div class="sb-section">
           <div class="file-btns">
-            <label for="modelInput" class="btn primary">Choose GLB</label>
+            <button id="reloadCharacterBtn" class="btn primary" type="button">Reload character</button>
             <label for="hdrInput" class="btn">Choose HDRI</label>
-            <a class="btn" href="./assets/260406_daymo_motion.glb" download="260406_daymo_motion.glb">Download default GLB</a>
           </div>
-          <div class="file-chip">
-            <span>Model</span>
-            <span id="modelFileName">assets/260406_daymo_motion.glb</span>
+          <div class="file-meta">
+            <div class="file-meta-row">
+              <span class="file-meta-label">Asset</span>
+              <span id="modelFileName" class="file-meta-value">assets/260408_daymo_motion.glb</span>
+            </div>
+            <div class="file-meta-row">
+              <span class="file-meta-label">HDRI</span>
+              <span id="hdrFileName" class="file-meta-value">Procedural studio</span>
+            </div>
           </div>
-          <div class="file-chip">
-            <span>HDRI</span>
-            <span id="hdrFileName">Procedural studio</span>
+          <div class="status-card">
+            <progress id="progress" class="progress" max="100" value="0"></progress>
+            <div id="status" class="status">Preparing character workbench…</div>
           </div>
-        </div>
-
-        <div class="sb-section">
-          <progress id="progress" class="progress" max="100" value="0"></progress>
-          <div id="status" class="status">Preparing scene…</div>
         </div>
 
         <div class="controls">
-          <label class="toggle">
-            <input id="bgToggle" type="checkbox" />
-            <span>Show environment background</span>
-          </label>
+          <div class="control-stack scene-control">
+            <div class="control-row">
+              <div class="group-label">Scene</div>
+              <div class="control-hint">Flat background</div>
+            </div>
+            <div class="background-swatch-row" aria-label="Background color presets">
+              <button class="background-swatch is-active" type="button" data-background-color="#000000" aria-label="Black" style="background:#000000;"></button>
+              <button class="background-swatch" type="button" data-background-color="#808080" aria-label="Gray" style="background:#808080;"></button>
+              <button class="background-swatch" type="button" data-background-color="#ffffff" aria-label="White" style="background:#ffffff;"></button>
+            </div>
+            <div class="control-sub">
+              Pick one flat backdrop tone for silhouette and texture review.
+            </div>
+          </div>
           <label class="toggle">
             <input id="shadowToggle" type="checkbox" />
             <span>Shadows</span>
@@ -505,7 +644,7 @@
 
           <div id="animationControl" class="control-stack animation-control" data-state="empty">
             <div class="control-row">
-              <div class="group-label">Animation clip</div>
+              <div class="group-label">Motion review</div>
               <div id="animationHint" class="control-hint">No clips</div>
             </div>
             <label class="select-wrap" for="animationSelect">
@@ -515,16 +654,13 @@
               <span class="select-icon" aria-hidden="true">⌄</span>
             </label>
             <div id="animationSub" class="control-sub">
-              Load an animated GLB to choose a clip here.
+              Switch between the character's loaded clips here.
             </div>
           </div>
 
           <div class="btn-stack">
             <button id="toggleAnimationBtn" class="btn" type="button" disabled>No animation</button>
-            <div class="btn-row">
-              <button id="resetCameraBtn" class="btn" type="button">Reset camera</button>
-              <button id="clearModelBtn" class="btn" type="button">Clear model</button>
-            </div>
+            <button id="resetCameraBtn" class="btn" type="button">Reset camera</button>
           </div>
         </div>
       </aside>
@@ -533,24 +669,13 @@
       <div id="viewport">
         <canvas id="canvas"></canvas>
 
-        <div id="dropzone" class="dropzone hidden">
-          <div class="drop-inner">
-            <div class="drop-border">
-              <div class="drop-title">Drop a GLB here</div>
-              <div class="drop-desc">
-                .glb 파일을 드래그하거나<br />왼쪽 패널에서 파일을 선택하세요.
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <div class="hint">Preset lights · Orbit camera · Drop GLB / HDR / EXR</div>
+        <div class="hint">Preset lights · Orbit camera · Review motion / textures / ASCII eyes</div>
       </div>
 
       <aside id="inspector">
         <div class="inspector-head">
-          <div class="inspector-title">Texture Inspector</div>
-          <div class="inspector-sub">Base Color can be replaced and restored per material.</div>
+          <div class="inspector-title">Character Inspector</div>
+          <div class="inspector-sub">Inspect the locked character asset, swap key textures, and drive face overlays with live ASCII eye frames.</div>
         </div>
 
         <div class="inspector-body">
@@ -572,13 +697,13 @@
               <div id="summaryVertices" class="summary-value">0</div>
             </div>
             <div class="summary-card">
-              <div class="summary-label">File Size</div>
+              <div class="summary-label">Asset Size</div>
               <div id="summaryFileSize" class="summary-value">-</div>
             </div>
           </div>
 
           <div id="inspectorEmpty" class="inspector-empty">
-            GLB를 로드하면 여기서 머티리얼별 텍스처를 확인할 수 있습니다.
+            Character asset details will appear here once the workbench finishes loading.
           </div>
 
           <div id="textureInspectorList" class="material-list"></div>
@@ -587,7 +712,6 @@
 
     </div>
 
-    <input id="modelInput" type="file" accept=".glb,model/gltf-binary" />
     <input id="hdrInput" type="file" accept=".hdr,.exr" />
 
     <script type="importmap">
@@ -598,6 +722,6 @@
       }
     }
     </script>
-    <script type="module" src="./viewer.js?v=20260406-3"></script>
+    <script type="module" src="./viewer.js?v=20260410-ascii-fix-6"></script>
   </body>
 </html>

@@ -1,8 +1,8 @@
-# glb-viewer
+# character-workbench
 
-Minimal browser-based Three.js viewer for `.glb` files.
+Single-character browser workbench built with Three.js.
 
-![GLB Viewer preview](./docs/preview.png)
+![Character Workbench preview](./docs/preview.png)
 
 ## Links
 
@@ -17,9 +17,10 @@ python3 -m http.server 8123
 
 Open `http://127.0.0.1:8123/`.
 
-## Includes
+## Workflow
 
-- Default model: `assets/260406_daymo_motion.glb`
-- Animation clip selector
-- Texture inspector
-- Basic texture replacement for supported slots
+- Canonical character asset: `assets/260408_daymo_motion.glb`
+- Reload the latest character build from the fixed asset path
+- Review animation clips and playback
+- Inspect replaceable textures and face sprite sheets
+- Optionally swap HDRI for look-dev checks

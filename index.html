@@ -555,6 +555,127 @@
         white-space: pre;
         overflow: auto;
       }
+      .ascii-review-strip {
+        display: grid;
+        gap: 8px;
+      }
+      .ascii-review-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+      .ascii-review-label {
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--text);
+      }
+      .ascii-review-sub {
+        color: var(--muted);
+        font-size: 10px;
+      }
+      .ascii-review-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 8px;
+      }
+      .ascii-review-card {
+        appearance: none;
+        width: 100%;
+        display: grid;
+        gap: 7px;
+        padding: 9px;
+        border-radius: 12px;
+        border: 1px solid rgba(255,255,255,0.08);
+        background: rgba(7, 10, 15, 0.58);
+        color: var(--text);
+        text-align: left;
+        cursor: pointer;
+        transition: border-color 120ms ease, background 120ms ease, transform 120ms ease;
+      }
+      .ascii-review-card:hover {
+        border-color: rgba(122,162,255,0.3);
+        background: rgba(12, 16, 24, 0.72);
+        transform: translateY(-1px);
+      }
+      .ascii-review-card.is-active {
+        border-color: rgba(122,162,255,0.52);
+        background:
+          radial-gradient(circle at top right, rgba(122,162,255,0.18), transparent 50%),
+          rgba(14, 18, 28, 0.84);
+        box-shadow: inset 0 0 0 1px rgba(122,162,255,0.12);
+      }
+      .ascii-review-card:disabled {
+        opacity: 0.58;
+        cursor: not-allowed;
+        transform: none;
+      }
+      .ascii-review-card-title {
+        font-size: 11px;
+        font-weight: 700;
+      }
+      .ascii-review-card-meta {
+        color: var(--muted);
+        font-size: 10px;
+        line-height: 1.4;
+      }
+      .ascii-review-card-pre {
+        margin: 0;
+        padding: 7px 8px;
+        border-radius: 8px;
+        background: rgba(255,255,255,0.03);
+        color: var(--text);
+        font-size: 7px;
+        line-height: 1;
+        font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+        white-space: pre;
+        overflow: hidden;
+      }
+      .expression-overlay {
+        position: absolute;
+        left: 12px;
+        bottom: 12px;
+        z-index: 10;
+        display: grid;
+        gap: 8px;
+        min-width: 228px;
+        max-width: min(320px, calc(100% - 24px));
+        padding: 12px 14px;
+        border-radius: 14px;
+        border: 1px solid rgba(122,162,255,0.18);
+        background:
+          radial-gradient(circle at top left, rgba(122,162,255,0.18), transparent 42%),
+          rgba(6, 8, 12, 0.84);
+        backdrop-filter: blur(14px);
+        box-shadow: 0 12px 30px rgba(0,0,0,0.28);
+      }
+      .expression-overlay[hidden] {
+        display: none;
+      }
+      .expression-overlay-title {
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        color: rgba(243,245,247,0.76);
+      }
+      .expression-overlay-pre {
+        margin: 0;
+        color: var(--text);
+        font-size: 12px;
+        line-height: 1.05;
+        font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+        white-space: pre;
+        overflow: auto;
+      }
+      .expression-overlay-meta {
+        color: var(--muted);
+        font-size: 11px;
+        line-height: 1.4;
+      }
       .pill-row {
         display: flex;
         flex-wrap: wrap;
@@ -594,7 +715,7 @@
       <aside id="sidebar">
         <div class="sb-section">
           <div class="sb-title">Character Workbench</div>
-          <div class="sb-sub">Single asset review · texture swaps · live ASCII eyes</div>
+          <div class="sb-sub">Single asset review · texture swaps · live ASCII expression</div>
         </div>
 
         <div class="sb-section">
@@ -669,13 +790,19 @@
       <div id="viewport">
         <canvas id="canvas"></canvas>
 
-        <div class="hint">Preset lights · Orbit camera · Review motion / textures / ASCII eyes</div>
+        <section id="asciiExpressionPanel" class="expression-overlay" hidden>
+          <div class="expression-overlay-title">ASCII Expression</div>
+          <pre id="asciiExpressionPreview" class="expression-overlay-pre"></pre>
+          <div id="asciiExpressionMeta" class="expression-overlay-meta"></div>
+        </section>
+
+        <div class="hint">Preset lights · Orbit camera · Review motion / textures / ASCII expression</div>
       </div>
 
       <aside id="inspector">
         <div class="inspector-head">
           <div class="inspector-title">Character Inspector</div>
-          <div class="inspector-sub">Inspect the locked character asset, swap key textures, and drive face overlays with live ASCII eye frames.</div>
+          <div class="inspector-sub">Inspect the locked character asset, swap key textures, and drive face overlays with live ASCII expression frames.</div>
         </div>
 
         <div class="inspector-body">
@@ -722,6 +849,6 @@
       }
     }
     </script>
-    <script type="module" src="./viewer.js?v=20260410-ascii-fix-6"></script>
+    <script type="module" src="./viewer.js?v=20260413-ascii-expression-35"></script>
   </body>
 </html>

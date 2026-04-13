@@ -91,6 +91,7 @@ const hdrFileName = document.querySelector('#hdrFileName');
 const asciiExpressionPanel = document.querySelector('#asciiExpressionPanel');
 const asciiExpressionPreview = document.querySelector('#asciiExpressionPreview');
 const asciiExpressionMeta = document.querySelector('#asciiExpressionMeta');
+const statePresetRow = document.querySelector('#statePresetRow');
 const TEXTURE_SLOTS = [
   ['map', 'Base Color'],
   ['normalMap', 'Normal'],
@@ -636,6 +637,22 @@ const MOUTH_FRAME_LIBRARY = Object.freeze([
   { label: 'Sad', mood: 'sad' },
   { label: 'Woo', mood: 'woo' },
 ]);
+
+const STATE_PRESETS = Object.freeze([
+  { label: 'idle', eye: 0, mouth: 0, blink: true, motion: 'idle' },
+  { label: 'thinking', eye: 4, mouth: 0, blink: false, motion: 'thinking' },
+  { label: 'done', eye: 6, mouth: 1, blink: false, motion: 'jump' },
+  { label: 'searching', eye: 3, mouth: 2, blink: false, motion: 'searching' },
+  { label: 'error', eye: 5, mouth: 4, blink: false, motion: 'waving' },
+  { label: 'offline', eye: 7, mouth: 0, blink: false, motion: 'death' },
+  { label: 'talking', eye: 0, mouth: 3, blink: true, motion: 'talking' },
+]);
+
+const findAnimationIndex = (keyword) => {
+  if (!keyword || !animationClips.length) return -1;
+  const kw = keyword.toLowerCase();
+  return animationClips.findIndex((clip) => clip?.name?.trim()?.toLowerCase().includes(kw));
+};
 
 const ASCII_EYE_GRID = Object.freeze({
   columns: 20,
@@ -2133,6 +2150,79 @@ const updateAsciiExpressionOverlay = () => {
   asciiExpressionSignature = signature;
 };
 
+let activeStatePreset = -1;
+const TALKING_MOUTH_FRAMES = [0, 3, 2, 0, 5, 3, 0, 2];
+let talkingAccumulator = 0;
+let talkingSegmentIndex = 0;
+
+const updateTalkingMouth = (mouth, delta) => {
+  if (activeStatePreset < 0 || STATE_PRESETS[activeStatePreset]?.label !== 'talking') return;
+  if (!mouth) return;
+  talkingAccumulator += delta;
+  const speed = 0.12 + Math.sin(talkingAccumulator * 1.7) * 0.04;
+  if (talkingAccumulator >= speed) {
+    talkingAccumulator = 0;
+    talkingSegmentIndex = (talkingSegmentIndex + 1) % TALKING_MOUTH_FRAMES.length;
+    mouth.expressionFrame = TALKING_MOUTH_FRAMES[talkingSegmentIndex];
+  }
+};
+const applyStatePreset = (presetIndex) => {
+  const preset = STATE_PRESETS[presetIndex];
+  if (!preset) return;
+  const { eyes, mouth } = getAsciiExpressionStates();
+  if (eyes) {
+    eyes.isPlaying = false;
+    eyes.playbackAccumulator = 0;
+    eyes.expressionFrame = preset.eye;
+    eyes.activeFrame = preset.eye;
+    eyes.blinkEnabled = preset.blink;
+    if (preset.blink) scheduleNextBlink(eyes);
+    renderAsciiFrameToTexture(eyes);
+    if (eyes.onFrameChange) eyes.onFrameChange();
+  }
+  if (mouth) {
+    mouth.isPlaying = false;
+    mouth.playbackAccumulator = 0;
+    mouth.expressionFrame = preset.mouth;
+    mouth.activeFrame = preset.mouth;
+    renderAsciiFrameToTexture(mouth);
+    if (mouth.onFrameChange) mouth.onFrameChange();
+  }
+  if (preset.motion) {
+    const clipIndex = findAnimationIndex(preset.motion);
+    if (clipIndex >= 0) {
+      isAnimationPlaying = true;
+      setActiveAnimation(clipIndex);
+    }
+  }
+  activeStatePreset = presetIndex;
+  updateStatePresetButtons();
+  setStatus(`State: ${preset.label}`);
+};
+
+const statePresetButtons = [];
+const buildStatePresetButtons = () => {
+  if (!statePresetRow) return;
+  statePresetRow.replaceChildren();
+  statePresetButtons.length = 0;
+  STATE_PRESETS.forEach((preset, index) => {
+    const btn = document.createElement('button');
+    btn.className = 'state-preset-btn';
+    btn.type = 'button';
+    btn.textContent = preset.label;
+    btn.addEventListener('click', () => applyStatePreset(index));
+    statePresetRow.append(btn);
+    statePresetButtons.push(btn);
+  });
+  statePresetRow.hidden = false;
+};
+
+const updateStatePresetButtons = () => {
+  statePresetButtons.forEach((btn, i) => {
+    btn.classList.toggle('is-active', i === activeStatePreset);
+  });
+};
+
 const normalizeAsciiState = (asciiState, { now = performance.now() * 0.001 } = {}) => {
   if (!asciiState) return;
 
@@ -2676,6 +2766,7 @@ const stepAsciiAnimations = (delta, now = performance.now() * 0.001) => {
     if (asciiState.layerType === 'eyes') {
       updateEyeMotionState(asciiState, delta, now);
     } else if (asciiState.layerType === 'mouth') {
+      updateTalkingMouth(asciiState, delta);
       updateMouthMotionState(asciiState, delta);
     }
 
@@ -4059,6 +4150,7 @@ const loadModel = async (url = currentModelUrl, { progressLabel = 'Loading chara
   frameModel(modelRoot);
   applyShadowState(shadowToggle.checked);
   initializeDefaultSpriteBindings(modelRoot);
+  buildStatePresetButtons();
   renderTextureInspector(modelRoot);
 
   hasAnimations = Boolean(gltf.animations?.length);

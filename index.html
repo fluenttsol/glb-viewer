@@ -691,6 +691,62 @@
         font-size: 10px;
       }
 
+      .state-preset-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 5px;
+      }
+      .state-preset-btn {
+        appearance: none;
+        padding: 4px 9px;
+        border-radius: 999px;
+        border: 1px solid rgba(255,255,255,0.1);
+        background: rgba(255,255,255,0.05);
+        color: var(--muted);
+        font-size: 10px;
+        font-family: inherit;
+        cursor: pointer;
+        transition: background 120ms, border-color 120ms, color 120ms;
+      }
+      .state-preset-btn:hover {
+        background: rgba(122,162,255,0.12);
+        border-color: rgba(122,162,255,0.3);
+        color: var(--text);
+      }
+      .state-preset-btn.is-active {
+        background: rgba(122,162,255,0.18);
+        border-color: rgba(122,162,255,0.5);
+        color: var(--text);
+      }
+
+      .state-preset-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 5px;
+      }
+      .state-preset-btn {
+        appearance: none;
+        padding: 4px 9px;
+        border-radius: 999px;
+        border: 1px solid rgba(255,255,255,0.1);
+        background: rgba(255,255,255,0.05);
+        color: var(--muted);
+        font-size: 10px;
+        font-family: inherit;
+        cursor: pointer;
+        transition: background 120ms, border-color 120ms, color 120ms;
+      }
+      .state-preset-btn:hover {
+        background: rgba(122,162,255,0.12);
+        border-color: rgba(122,162,255,0.3);
+        color: var(--text);
+      }
+      .state-preset-btn.is-active {
+        background: rgba(122,162,255,0.18);
+        border-color: rgba(122,162,255,0.5);
+        color: var(--text);
+      }
+
       .hint {
         position: absolute;
         right: 12px;
@@ -794,6 +850,7 @@
           <div class="expression-overlay-title">ASCII Expression</div>
           <pre id="asciiExpressionPreview" class="expression-overlay-pre"></pre>
           <div id="asciiExpressionMeta" class="expression-overlay-meta"></div>
+          <div id="statePresetRow" class="state-preset-row" hidden></div>
         </section>
 
         <div class="hint">Preset lights · Orbit camera · Review motion / textures / ASCII expression</div>

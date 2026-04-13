@@ -147,8 +147,8 @@ const ASCII_TEXTURE_RENDER = Object.freeze({
   gridRows: 32,
   eyeLogicalWidth: 40,
   eyeLogicalHeight: 60,
-  mouthLogicalWidth: 32,
-  mouthLogicalHeight: 24,
+  mouthLogicalWidth: 40,
+  mouthLogicalHeight: 40,
 });
 const EYE_REVIEW_ROW_LABELS = Object.freeze([
   'Base Mood',
@@ -165,7 +165,7 @@ const MOUTH_REVIEW_ROW_LABELS = Object.freeze([
 const ASCII_EYE_BOXES = Object.freeze({
   left: { x: 353, y: 387, width: 70, height: 98 },
   right: { x: 602, y: 387, width: 70, height: 98 },
-  mouth: { x: 471, y: 453, width: 88, height: 32 },
+  mouth: { x: 440, y: 440, width: 140, height: 80 },
 });
 const GAMMA_SHADER = {
   uniforms: {
@@ -291,6 +291,7 @@ let currentAnimationIndex = -1;
 const textureOverrides = new Map();
 const spriteBindings = new Map();
 const asciiBindings = new Map();
+const sharedGaze = { x: 0, y: 0 };
 const isFileProtocol = window.location.protocol === 'file:';
 let asciiExpressionSignature = '';
 
@@ -628,22 +629,12 @@ const EYE_FRAME_LIBRARY = Object.freeze([
 ]);
 
 const MOUTH_FRAME_LIBRARY = Object.freeze([
-  { label: 'Rest', viseme: 'rest', open: 0.02, width: 0.58, smile: 0.22 },
-  { label: 'Smile', viseme: 'smile', open: 0.1, width: 0.78, smile: 0.55 },
-  { label: 'Grin', viseme: 'grin', open: 0.16, width: 0.88, smile: 0.84 },
-  { label: 'Frown', viseme: 'frown', open: 0.06, width: 0.72, smile: -0.48 },
-  { label: 'M B P', viseme: 'mbp', open: 0.02, width: 0.62, press: 1 },
-  { label: 'Ah', viseme: 'ah', open: 0.8, width: 0.58, smile: 0.04 },
-  { label: 'Ee', viseme: 'ee', open: 0.28, width: 0.92, smile: 0.14, stretch: 1 },
-  { label: 'Oh', viseme: 'oh', open: 0.7, width: 0.42, round: 1 },
-  { label: 'Woo', viseme: 'u', open: 0.4, width: 0.34, round: 1, press: 0.22 },
-  { label: 'F V', viseme: 'fv', open: 0.18, width: 0.74, bite: 1 },
-  { label: 'Talk Soft', viseme: 'talk-soft', open: 0.24, width: 0.68, smile: 0.04 },
-  { label: 'Talk Wide', viseme: 'talk-wide', open: 0.42, width: 0.84, smile: 0.08 },
-  { label: 'Talk Round', viseme: 'talk-round', open: 0.56, width: 0.48, round: 1 },
-  { label: 'Tiny', viseme: 'tiny', open: 0.1, width: 0.4, press: 0.1 },
-  { label: 'Surprise O', viseme: 'surprise', open: 0.92, width: 0.38, round: 1 },
-  { label: 'Mumble', viseme: 'mumble', open: 0.24, width: 0.58, smile: -0.04, jitter: 0.34 },
+  { label: 'Rest', mood: 'rest' },
+  { label: 'Smile', mood: 'smile' },
+  { label: 'O', mood: 'o' },
+  { label: 'Ah', mood: 'ah' },
+  { label: 'Sad', mood: 'sad' },
+  { label: 'Woo', mood: 'woo' },
 ]);
 
 const ASCII_EYE_GRID = Object.freeze({
@@ -655,8 +646,10 @@ const ASCII_EYE_GRID = Object.freeze({
   renderCellHeight: 1,
 });
 const ASCII_MOUTH_GRID = Object.freeze({
-  columns: 16,
-  rows: 12,
+  columns: 20,
+  rows: 20,
+  sampleColumnsPerCell: 4,
+  sampleRowsPerCell: 4,
   renderCellWidth: 2,
   renderCellHeight: 2,
 });
@@ -669,12 +662,7 @@ const ASCII_EYE_MASK_THRESHOLDS = Object.freeze({
   on: 0.5,
   off: 0.32,
 });
-const ASCII_IMPORTED_EYE_ASSET_PATHS = Object.freeze({
-  Blink: { path: './assets/blink.svg', threshold: 0.4, targetRows: 4 },
-});
 const ASYMMETRIC_EYE_FRAME_LABELS = new Set(['Wink']);
-const asciiImportedEyeAssets = new Map();
-let asciiImportedEyeAssetsPromise = null;
 
 const clampUnit = (value) => THREE.MathUtils.clamp(value, 0, 1);
 const lerp = (start, end, alpha) => start + (end - start) * alpha;
@@ -706,9 +694,9 @@ const blendEyePoses = (fromPose, toPose, alpha = 1) => {
   EYE_POSE_KEYS.forEach((key) => {
     next[key] = lerp(from[key] ?? 0, to[key] ?? 0, alpha);
   });
-  next.winkSide = alpha < 0.5 ? from.winkSide ?? null : to.winkSide ?? null;
-  next.label = alpha < 0.5 ? from.label ?? '' : to.label ?? '';
-  next.mood = alpha < 0.5 ? from.mood ?? 'neutral' : to.mood ?? 'neutral';
+  next.winkSide = to.winkSide ?? null;
+  next.label = to.label ?? '';
+  next.mood = to.mood ?? 'neutral';
   return next;
 };
 const quantizeCoverageToAscii = (coverage = 0) => (coverage >= ASCII_EYE_MASK_THRESHOLDS.on ? '█' : ' ');
@@ -744,255 +732,7 @@ const createEyeMaskFromAsciiRows = (rows = []) => {
 
   return mask;
 };
-const DIE_EYE_MASK_ROWS = Object.freeze([
-  '███         ███',
-  ' ███       ███ ',
-  '  ███     ███  ',
-  '   ███   ███   ',
-  '    ███ ███    ',
-  '     █████     ',
-  '      ███      ',
-  '      ███      ',
-  '     █████     ',
-  '    ███ ███    ',
-  '   ███   ███   ',
-  '  ███     ███  ',
-  ' ███       ███ ',
-  '███         ███',
-]);
-const DIE_EYE_ASSET = (() => {
-  const mask = createEyeMaskFromAsciiRows(DIE_EYE_MASK_ROWS);
-  return createImportedEyeAsset({
-    left: mask,
-    right: cloneEyeMask(mask),
-  });
-})();
-const WINK_LEFT_EYE_MASK_ROWS = Object.freeze([
-  '███                 ',
-  ' ████               ',
-  '  █████             ',
-  '   █████            ',
-  '     █████          ',
-  '      █████         ',
-  '       █████        ',
-  '        ██████      ',
-  '        ██████      ',
-  '       █████        ',
-  '      █████         ',
-  '     █████          ',
-  '   █████            ',
-  '  █████             ',
-  ' ████               ',
-  '███                 ',
-]);
-const WINK_LEFT_EYE_MASK = createEyeMaskFromAsciiRows(WINK_LEFT_EYE_MASK_ROWS);
-const getRectAttributeNumber = (rect, name, fallback = 0) => {
-  const value = Number(rect.getAttribute(name));
-  return Number.isFinite(value) ? value : fallback;
-};
-const parseSvgEyeRect = (rect) => {
-  const width = getRectAttributeNumber(rect, 'width');
-  const height = getRectAttributeNumber(rect, 'height');
-  let x = getRectAttributeNumber(rect, 'x', Number.NaN);
-  let y = getRectAttributeNumber(rect, 'y', Number.NaN);
-  const transform = rect.getAttribute('transform') ?? '';
-  const mirrored = transform.match(/matrix\(\s*-1\s+0\s+0\s+1\s+([^\s)]+)\s+([^\s)]+)\s*\)/);
-  if (mirrored) {
-    x = Number(mirrored[1]) - width;
-    y = Number(mirrored[2]);
-  }
-
-  if (!Number.isFinite(x) || !Number.isFinite(y) || width <= 0 || height <= 0) return null;
-  return {
-    x,
-    y,
-    width,
-    height,
-    fill: (rect.getAttribute('fill') ?? 'black').trim().toLowerCase(),
-  };
-};
-const getRectBounds = (rects = []) => {
-  if (!rects.length) return null;
-  const minX = Math.min(...rects.map((rect) => rect.x));
-  const minY = Math.min(...rects.map((rect) => rect.y));
-  const maxX = Math.max(...rects.map((rect) => rect.x + rect.width));
-  const maxY = Math.max(...rects.map((rect) => rect.y + rect.height));
-  return {
-    minX,
-    minY,
-    maxX,
-    maxY,
-    width: Math.max(1, maxX - minX),
-    height: Math.max(1, maxY - minY),
-  };
-};
-const rectContainsPoint = (rect, x, y) => x >= rect.x && x < rect.x + rect.width && y >= rect.y && y < rect.y + rect.height;
-const rasterizeSvgRectsToEyeMask = (rects = [], cutoutRects = [], bounds = null, { threshold = 0.25 } = {}) => {
-  if (!rects.length || !bounds) return createEmptyEyeMask();
-
-  const totalColumns = ASCII_EYE_GRID.columns * ASCII_EYE_GRID.sampleColumnsPerCell;
-  const totalRows = ASCII_EYE_GRID.rows * ASCII_EYE_GRID.sampleRowsPerCell;
-
-  return Array.from({ length: ASCII_EYE_GRID.rows }, (_, rowIndex) =>
-    Array.from({ length: ASCII_EYE_GRID.columns }, (_, columnIndex) => {
-      let filledSamples = 0;
-      const totalSamples = ASCII_EYE_GRID.sampleColumnsPerCell * ASCII_EYE_GRID.sampleRowsPerCell;
-
-      for (let sampleRow = 0; sampleRow < ASCII_EYE_GRID.sampleRowsPerCell; sampleRow += 1) {
-        for (let sampleCol = 0; sampleCol < ASCII_EYE_GRID.sampleColumnsPerCell; sampleCol += 1) {
-          const sourceX =
-            bounds.minX +
-            (((columnIndex * ASCII_EYE_GRID.sampleColumnsPerCell + sampleCol) + 0.5) / totalColumns) * bounds.width;
-          const sourceY =
-            bounds.minY +
-            (((rowIndex * ASCII_EYE_GRID.sampleRowsPerCell + sampleRow) + 0.5) / totalRows) * bounds.height;
-          const isFilled = rects.some((rect) => rectContainsPoint(rect, sourceX, sourceY));
-          if (!isFilled) continue;
-          const isCutOut = cutoutRects.some((rect) => rectContainsPoint(rect, sourceX, sourceY));
-          if (!isCutOut) {
-            filledSamples += 1;
-          }
-        }
-      }
-
-      return filledSamples / totalSamples >= threshold;
-    }),
-  );
-};
-const insetRectBounds = (bounds, insetTop = 0, insetBottom = 0) => {
-  if (!bounds) return null;
-  const insetHeight = bounds.height * THREE.MathUtils.clamp(insetTop + insetBottom, 0, 0.9);
-  const nextHeight = Math.max(1, bounds.height - insetHeight);
-  return {
-    ...bounds,
-    minY: bounds.minY + bounds.height * THREE.MathUtils.clamp(insetTop, 0, 0.45),
-    maxY: bounds.minY + bounds.height * THREE.MathUtils.clamp(insetTop, 0, 0.45) + nextHeight,
-    height: nextHeight,
-  };
-};
-const expandRectBoundsToTargetRows = (bounds, targetRows = 0) => {
-  if (!bounds || !Number.isFinite(targetRows) || targetRows <= 0) return bounds;
-  const clampedTargetRows = THREE.MathUtils.clamp(Math.round(targetRows), 1, ASCII_EYE_GRID.rows);
-  const desiredHeight = Math.max(bounds.height, bounds.height * (ASCII_EYE_GRID.rows / clampedTargetRows));
-  const centerY = bounds.minY + bounds.height * 0.5;
-  return {
-    ...bounds,
-    minY: centerY - desiredHeight * 0.5,
-    maxY: centerY + desiredHeight * 0.5,
-    height: desiredHeight,
-  };
-};
-const loadImportedEyeAssetFromSvg = (svgText = '', options = {}) => {
-  const documentRoot = new DOMParser().parseFromString(svgText, 'image/svg+xml');
-  const parsedRects = Array.from(documentRoot.querySelectorAll('rect'))
-    .map(parseSvgEyeRect)
-    .filter(Boolean);
-  const blackRects = parsedRects.filter((rect) => rect.fill !== 'white');
-  if (!blackRects.length) return null;
-
-  const overallBounds = getRectBounds(blackRects);
-  if (!overallBounds) return null;
-
-  const splitX = overallBounds.minX + overallBounds.width * 0.5;
-  const splitRectsBySide = (rects) => ({
-    left: rects.filter((rect) => rect.x + rect.width * 0.5 < splitX),
-    right: rects.filter((rect) => rect.x + rect.width * 0.5 >= splitX),
-  });
-
-  const blackBySide = splitRectsBySide(blackRects);
-  const whiteBySide = splitRectsBySide(parsedRects.filter((rect) => rect.fill === 'white'));
-  const leftBounds = expandRectBoundsToTargetRows(
-    insetRectBounds(getRectBounds(blackBySide.left) ?? overallBounds, options.insetTop ?? 0, options.insetBottom ?? 0),
-    options.targetRows ?? 0,
-  );
-  const rightBounds = expandRectBoundsToTargetRows(
-    insetRectBounds(getRectBounds(blackBySide.right) ?? overallBounds, options.insetTop ?? 0, options.insetBottom ?? 0),
-    options.targetRows ?? 0,
-  );
-  const leftMask = rasterizeSvgRectsToEyeMask(blackBySide.left, whiteBySide.left, leftBounds, options);
-  const rightMask = rasterizeSvgRectsToEyeMask(blackBySide.right, whiteBySide.right, rightBounds, options);
-  const leftHighlightMask = whiteBySide.left.length
-    ? rasterizeSvgRectsToEyeMask(whiteBySide.left, [], leftBounds, { threshold: options.highlightThreshold ?? 0.2 })
-    : null;
-  const rightHighlightMask = whiteBySide.right.length
-    ? rasterizeSvgRectsToEyeMask(whiteBySide.right, [], rightBounds, { threshold: options.highlightThreshold ?? 0.2 })
-    : null;
-
-  if (options.asymmetric) {
-    return createImportedEyeAsset({
-      left: leftMask,
-      right: rightMask,
-      leftHighlight: leftHighlightMask,
-      rightHighlight: rightHighlightMask,
-    });
-  }
-
-  const canonicalMask = getEyeMaskCells(leftMask).length ? leftMask : rightMask;
-  const canonicalHighlight = leftHighlightMask ?? rightHighlightMask;
-
-  return createImportedEyeAsset({
-    left: canonicalMask,
-    right: cloneEyeMask(canonicalMask),
-    leftHighlight: canonicalHighlight,
-    rightHighlight: canonicalHighlight ? cloneEyeMask(canonicalHighlight) : null,
-  });
-};
-const rerenderImportedEyeAssets = () => {
-  asciiBindings.forEach((binding) => {
-    const asciiState = binding.ascii;
-    if (!asciiState || asciiState.layerType !== 'eyes') return;
-    renderAsciiFrameToTexture(asciiState);
-    asciiState.onVisualUpdate?.();
-  });
-  updateAsciiExpressionOverlay();
-};
-const ensureImportedEyeAssetsLoaded = () => {
-  if (asciiImportedEyeAssetsPromise) return asciiImportedEyeAssetsPromise;
-  if (typeof window === 'undefined' || typeof DOMParser === 'undefined') {
-    asciiImportedEyeAssetsPromise = Promise.resolve(asciiImportedEyeAssets);
-    return asciiImportedEyeAssetsPromise;
-  }
-
-  asciiImportedEyeAssetsPromise = Promise.all(
-    Object.entries(ASCII_IMPORTED_EYE_ASSET_PATHS).map(async ([label, assetDefinition]) => {
-      try {
-        const assetOptions = typeof assetDefinition === 'string' ? { path: assetDefinition } : assetDefinition;
-        const response = await fetch(new URL(assetOptions.path, import.meta.url));
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        const svgText = await response.text();
-        const asset = loadImportedEyeAssetFromSvg(svgText, assetOptions);
-        if (asset) {
-          asciiImportedEyeAssets.set(label, asset);
-        }
-      } catch (error) {
-        console.warn(`Failed to load imported eye asset for ${label}.`, error);
-      }
-    }),
-  )
-    .then(() => {
-      rerenderImportedEyeAssets();
-      return asciiImportedEyeAssets;
-    })
-    .catch((error) => {
-      console.warn('Failed to initialize imported eye assets.', error);
-      return asciiImportedEyeAssets;
-    });
-
-  return asciiImportedEyeAssetsPromise;
-};
-const getImportedEyeAssetForFrame = (frameIndex = 0) => {
-  const preset = getEyePreset(frameIndex);
-  if (preset.label === 'Die') return DIE_EYE_ASSET;
-  if (preset.label === 'Wink') {
-    const neutralPose = createEyePoseFromFrame(0);
-    const rightMask = quantizeEyeCoverageRows(rasterizeEyePoseToCoverage(neutralPose, 'right', neutralPose.time ?? 0));
-    return createImportedEyeAsset({
-      left: WINK_LEFT_EYE_MASK,
-      right: rightMask,
-    });
-  }
-  return asciiImportedEyeAssets.get(preset.label) ?? null;
-};
+const getImportedEyeAssetForFrame = () => null;
 const quantizeEyeCoverageRows = (coverageRows = [], previousMask = null) =>
   coverageRows.map((row, rowIndex) =>
     row.map((coverage, columnIndex) => {
@@ -1034,13 +774,13 @@ const mapEyePresetToPose = (preset = {}) => {
     case 'loading':
       return createEyePose({ ...shared, width: 1.01, height: 1.8, squeeze: 0.01, curve: 0.86, flatness: 0.44, capsuleBlend: 1 });
     case 'moving':
-      return createEyePose({ ...shared, width: 0.98, height: 1, squeeze: 0.06, curve: 1.56, flatness: 0.56 });
+      return createEyePose({ ...shared, width: 1.01, height: 1.8, squeeze: 0.01, curve: 0.86, flatness: 0.44, capsuleBlend: 1 });
     case 'die':
-      return createEyePose({ ...shared, open: 0.24, width: 0.9, height: 0.54, squeeze: 0.3, curve: 1.1, flatness: 0.72 });
+      return createEyePose({ ...shared, open: 0.52, width: 0.95, height: 1.2, squeeze: 0.15, curve: 0.9, flatness: 0.5, scanlineGlitch: 0.7 });
     case 'wink':
-      return createEyePose({ ...shared, width: 0.98, height: 1.08, squeeze: 0.08, curve: 1.62, flatness: 0.52 });
+      return createEyePose({ ...shared, width: 1.01, height: 1.8, squeeze: 0.01, curve: 0.86, flatness: 0.44, capsuleBlend: 1 });
     case 'sleepy':
-      return createEyePose({ ...shared, width: 0.9, height: 0.48, squeeze: 0.34, curve: 1.08, flatness: 0.74 });
+      return createEyePose({ ...shared, width: 1.01, height: 0.48, squeeze: 0.34, curve: 1.08, flatness: 0.74 });
     default:
       return createEyePose({ ...shared, width: 1.01, height: 1.8, squeeze: 0.01, curve: 0.86, flatness: 0.44, capsuleBlend: 1 });
   }
@@ -1051,37 +791,69 @@ const evaluateEyeSampleCoverage = (pose, side, sampleColumn, sampleRow, time = 0
   const totalColumns = ASCII_EYE_GRID.columns * ASCII_EYE_GRID.sampleColumnsPerCell;
   const totalRows = ASCII_EYE_GRID.rows * ASCII_EYE_GRID.sampleRowsPerCell;
   const sideSign = side === 'left' ? 1 : -1;
+
   const normalizedX = ((sampleColumn + 0.5) / totalColumns) * 2 - 1 - (pose.shiftX ?? 0);
   const normalizedY = ((sampleRow + 0.5) / totalRows) * 2 - 1 - (pose.shiftY ?? 0);
+
+  if (pose.mood === 'die') {
+    const scale = 0.7;
+    const nx = normalizedX / scale;
+    const ny = normalizedY / scale;
+    const thickness = 0.18;
+    const diag1 = Math.abs(nx - ny) / Math.SQRT2;
+    const diag2 = Math.abs(nx + ny) / Math.SQRT2;
+    if (Math.abs(nx) > 1 || Math.abs(ny) > 1) return 0;
+    return (diag1 <= thickness || diag2 <= thickness) ? 1 : 0;
+  }
+
+  if (pose.mood === 'loading') {
+    const w = Math.max(0.35, pose.width ?? 1.01);
+    const lx = normalizedX / w;
+    const absLx = Math.abs(lx);
+    const neutralOpen = 0.72;
+    const hh = Math.max(0.06, (0.11 + neutralOpen * 0.56) * Math.max(0.22, pose.height ?? 1.8));
+    const flat = THREE.MathUtils.clamp(pose.flatness ?? 0.44, 0, 0.92);
+    const ly = normalizedY / hh;
+    const absLy = Math.abs(ly);
+    let wf = 1;
+    if (absLy > flat) {
+      const ct = (absLy - flat) / Math.max(0.001, 1 - flat);
+      wf = Math.sqrt(Math.max(0, 1 - ct * ct));
+    }
+    const csq = (pose.squeeze ?? 0.01) * absLy * 0.12;
+    const edge = Math.max(0, wf - csq);
+    const pxPerLx = w * ASCII_EYE_GRID.columns * 0.5;
+    const pxPerLy = hh * ASCII_EYE_GRID.rows * 0.5;
+    const insideX = edge - absLx;
+    const insideY = 1 - absLy;
+    const isInside = insideX > 0 && insideY > 0;
+    let pixelDist;
+    if (isInside) {
+      pixelDist = -Math.min(insideX * pxPerLx, insideY * pxPerLy);
+    } else if (insideX <= 0 && insideY <= 0) {
+      pixelDist = Math.sqrt((-insideX * pxPerLx) ** 2 + (-insideY * pxPerLy) ** 2);
+    } else if (insideX <= 0) {
+      pixelDist = -insideX * pxPerLx;
+    } else {
+      pixelDist = -insideY * pxPerLy;
+    }
+    const thicknessCells = 1.8;
+    if (!isInside) return 0;
+    if (-pixelDist > thicknessCells) return 0;
+    const angle = ((Math.atan2(ly, lx) + Math.PI * 2.5) % (Math.PI * 2)) / (Math.PI * 2);
+    const head = ((time * 0.38) % 1);
+    let diff = angle - head;
+    if (diff < 0) diff += 1;
+    const segmentLen = 0.65;
+    if (diff > segmentLen) return 0;
+    return 1;
+  }
+
   const effectiveWidth = Math.max(0.35, pose.width ?? 1.04);
   const localX = normalizedX / effectiveWidth;
   const winkFactor = pose.winkSide === side ? 0.08 : 1;
   const blinkFactor = 1 - clampUnit((pose.blinkClosure ?? 0) * 0.96);
   const effectiveOpen = Math.max(0.012, clampUnit(pose.open ?? 0.72) * winkFactor * blinkFactor);
-  if (effectiveOpen <= 0.06) {
-    const closedLocalX = normalizedX / Math.max(1.02, effectiveWidth);
-    const absClosedLocalX = Math.abs(closedLocalX);
-    if (absClosedLocalX > 1) return 0;
-    const blinkSmile =
-      pose.mood === 'blink'
-        ? 0.58
-        : clampUnit((clampUnit(pose.blinkClosure ?? 0) - 0.2) / 0.8) * 0.4;
-    const smileArc = Math.pow(Math.max(0, 1 - absClosedLocalX), 0.68);
-    const slitCenter = (pose.slant ?? 0) * sideSign * localX * 0.18 - blinkSmile * (0.01 + smileArc * 0.11);
-    const slitHalfThickness = THREE.MathUtils.lerp(0.034, 0.028, blinkSmile);
-    const bodyHalfWidth = THREE.MathUtils.lerp(0.76, 0.8, blinkSmile);
-    if (absClosedLocalX <= bodyHalfWidth && Math.abs(normalizedY - slitCenter) <= slitHalfThickness) {
-      return 1;
-    }
-
-    const capRadiusX = Math.max(0.001, 1 - bodyHalfWidth);
-    const capDx = (absClosedLocalX - bodyHalfWidth) / capRadiusX;
-    const capDy = (normalizedY - slitCenter) / (slitHalfThickness * THREE.MathUtils.lerp(1.14, 1.24, blinkSmile));
-    if (capDx * capDx + capDy * capDy <= 1) {
-      return 1;
-    }
-    return 0;
-  }
   if (Math.abs(localX) > 1) return 0;
   const curve = Math.max(0.18, pose.curve ?? 0.86);
   const absLocalX = Math.abs(localX);
@@ -1095,10 +867,18 @@ const evaluateEyeSampleCoverage = (pose, side, sampleColumn, sampleRow, time = 0
   const halfHeight = Math.max(0.06, (0.11 + effectiveOpen * 0.56) * Math.max(0.22, pose.height ?? 1.8));
   const slantOffset = (pose.slant ?? 0) * sideSign * localX * 0.22;
   const squeezeOffset = (pose.squeeze ?? 0) * localX * localX * 0.16;
-  const top = -arch * halfHeight + slantOffset + squeezeOffset;
-  const bottom = arch * halfHeight + slantOffset - squeezeOffset;
+
+  const blinkCurveDir = pose.mood === 'sleepy' ? -0.85 : pose.mood === 'blink' ? 0.7
+    : clampUnit((clampUnit(pose.blinkClosure ?? 0) - 0.2) / 0.8) * 0.5;
+  const closeFactor = clampUnit(1 - effectiveOpen / 0.15);
+  const smileArc = Math.pow(Math.max(0, 1 - absLocalX * absLocalX), 0.5);
+  const closedCurveY = -blinkCurveDir * (0.04 + smileArc * 0.35) * closeFactor;
+
+  const closedSlitHalf = 0.11;
+  const top = lerp(-arch * halfHeight, closedCurveY - closedSlitHalf, closeFactor) + slantOffset + squeezeOffset;
+  const bottom = lerp(arch * halfHeight, closedCurveY + closedSlitHalf, closeFactor) + slantOffset - squeezeOffset;
   const archCoverage = normalizedY >= top && normalizedY <= bottom ? 1 : 0;
-  const localY = (normalizedY - slantOffset) / Math.max(halfHeight, 0.001);
+  const localY = (normalizedY - slantOffset - closedCurveY * closeFactor) / Math.max(halfHeight * (1 - closeFactor * 0.8), 0.02);
   const absLocalY = Math.abs(localY);
   let capsuleCoverage = 0;
   if (absLocalY <= 1) {
@@ -1155,7 +935,34 @@ const rasterizeEyePoseToCoverage = (pose, side, time = 0) => {
     coverageRows.push(coverageRow);
   }
 
+  if ((pose.scanlineGlitch ?? 0) > 0) {
+    applyScanlineGlitch(coverageRows, pose.scanlineGlitch, time);
+  }
+
   return coverageRows;
+};
+const applyScanlineGlitch = (coverageRows, intensity, time) => {
+  const columns = coverageRows[0]?.length ?? 0;
+  const tick = Math.floor(time * 2.5);
+  const burstSeed = ((tick * 73) % 47) / 47;
+  if (burstSeed > 0.35) return;
+
+  const rowCount = coverageRows.length;
+  const glitchA = ((tick * 197) % rowCount);
+  const glitchB = ((tick * 83 + 7) % rowCount);
+  const glitchC = ((tick * 251 + 13) % rowCount);
+
+  for (let row = 0; row < rowCount; row += 1) {
+    if (row !== glitchA && row !== glitchB && row !== glitchC) continue;
+    const dir = ((row * 53 + tick * 179) % 37) > 18 ? 1 : -1;
+    const mag = 0.5;
+    const shift = dir * Math.round(mag * intensity * columns * 0.35);
+    const original = [...coverageRows[row]];
+    for (let col = 0; col < columns; col += 1) {
+      const src = col - shift;
+      coverageRows[row][col] = (src >= 0 && src < columns) ? original[src] : 0;
+    }
+  }
 };
 const coverageRowsToAscii = (coverageRows = []) =>
   coverageRows.map((row) => row.map((coverage) => quantizeCoverageToAscii(coverage)).join(''));
@@ -1408,7 +1215,7 @@ const createEyeOutlineMask = (mask = [], thickness = 1) => {
   );
 };
 const getLoadingStrokeCells = (mask = [], effectTime = 0, side = 'left') => {
-  const outlineMask = createEyeOutlineMask(mask, 1);
+  const outlineMask = createEyeOutlineMask(mask, 2);
   const outlineCells = getEyeMaskCells(outlineMask);
   const center = getEyeMaskCenter(mask);
   const bounds = getEyeMaskBounds(mask);
@@ -1433,7 +1240,7 @@ const getLoadingStrokeCells = (mask = [], effectTime = 0, side = 'left') => {
 
   for (let index = 0; index < segmentLength; index += 1) {
     const cell = normalizedCells[(head + index) % total];
-    const alpha = THREE.MathUtils.lerp(1, 0.8, (segmentLength - 1 - index) / Math.max(1, segmentLength - 1));
+    const alpha = THREE.MathUtils.lerp(1, 0.3, (segmentLength - 1 - index) / Math.max(1, segmentLength - 1));
     segmentMask[cell.rowIndex][cell.columnIndex] = true;
     trail.push({ ...cell, alpha });
   }
@@ -1696,150 +1503,205 @@ const centerAsciiRow = (text = '', width = 9) => {
   const rightPadding = padding - leftPadding;
   return `${' '.repeat(leftPadding)}${chars.join('')}${' '.repeat(rightPadding)}`;
 };
-const createAsciiMouthMasks = (preset = {}, effectTime = 0) => {
-  const outlineMask = createEmptyAsciiMask(ASCII_MOUTH_GRID.rows, ASCII_MOUTH_GRID.columns);
+const MOUTH_COVERAGE_THRESHOLD = 0.5;
+
+const evaluateMouthSampleCoverage = (mood, sampleCol, sampleRow) => {
+  const totalCols = ASCII_MOUTH_GRID.columns * ASCII_MOUTH_GRID.sampleColumnsPerCell;
+  const totalRows = ASCII_MOUTH_GRID.rows * ASCII_MOUTH_GRID.sampleRowsPerCell;
+  const nx = ((sampleCol + 0.5) / totalCols) * 2 - 1;
+  const ny = ((sampleRow + 0.5) / totalRows) * 2 - 1;
+
+  switch (mood) {
+    case 'rest':
+      return evaluateMouthRest(nx, ny);
+    case 'smile':
+      return evaluateMouthSmile(nx, ny);
+    case 'o':
+      return evaluateMouthO(nx, ny);
+    case 'ah':
+      return evaluateMouthAh(nx, ny);
+    case 'sad':
+      return evaluateMouthSad(nx, ny);
+    case 'woo':
+      return evaluateMouthWoo(nx, ny);
+    default:
+      return evaluateMouthRest(nx, ny);
+  }
+};
+
+const MOUTH_HALF_THICKNESS_CELLS = 1.2;
+const MOUTH_PX_PER_NX = ASCII_MOUTH_GRID.columns * 0.5;
+const MOUTH_PX_PER_NY = ASCII_MOUTH_GRID.rows * 0.5;
+
+const mouthStrokePixel = (dist, gradNx, gradNy) => {
+  const gLen = Math.sqrt((gradNx * MOUTH_PX_PER_NX) ** 2 + (gradNy * MOUTH_PX_PER_NY) ** 2);
+  const pixelDist = Math.abs(dist) * (gLen > 0.001 ? gLen : MOUTH_PX_PER_NY);
+  return pixelDist <= MOUTH_HALF_THICKNESS_CELLS ? 1 : 0;
+};
+
+const evaluateMouthRest = (nx, ny) => {
+  const ax = Math.abs(nx);
+  if (ax > 0.85) return 0;
+  return Math.abs(ny) <= 0.09 ? 1 : 0;
+};
+
+const evaluateMouthSmile = (nx, ny) => {
+  const ax = Math.abs(nx);
+  if (ax > 0.72) return 0;
+  const t = ax / 0.72;
+  const arc = Math.pow(Math.max(0, 1 - t * t), 0.7);
+  const curveY = -0.18 + arc * 0.42;
+  const edgeThicken = t > 0.7 ? 0.04 : 0;
+  return Math.abs(ny - curveY) <= 0.09 + edgeThicken ? 1 : 0;
+};
+
+const evaluateMouthO = (nx, ny) => {
+  const rx = 0.38;
+  const ry = 0.72;
+  const dx = nx / rx;
+  const dy = ny / ry;
+  const dist = Math.sqrt(dx * dx + dy * dy);
+  const thickness = 0.3;
+  return Math.abs(dist - 1) <= thickness ? 1 : 0;
+};
+
+const evaluateMouthAh = (nx, ny) => {
+  const rx = 0.82;
+  const halfH = 0.92;
+  const cy = ny + 0.08;
+  if (Math.abs(nx) > rx || cy < -halfH * 0.25 || cy > halfH) return 0;
+  if (cy <= 0) return 1;
+  const dx = nx / rx;
+  const dy = cy / halfH;
+  return (dx * dx + dy * dy <= 1) ? 1 : 0;
+};
+
+const evaluateMouthSad = (nx, ny) => {
+  const ax = Math.abs(nx);
+  if (ax > 0.62) return 0;
+  const t = ax / 0.62;
+  const arc = Math.pow(Math.max(0, 1 - t * t), 0.7);
+  const curveY = 0.22 - arc * 0.36;
+  const edgeThicken = t > 0.65 ? 0.06 : 0;
+  return Math.abs(ny - curveY) <= 0.09 + edgeThicken ? 1 : 0;
+};
+
+const evaluateMouthWoo = (nx, ny) => {
+  const rx = 0.32;
+  const ry = 0.48;
+  const dx = nx / rx;
+  const dy = ny / ry;
+  const dist = Math.sqrt(dx * dx + dy * dy);
+  const thickness = 0.38;
+  return Math.abs(dist - 1) <= thickness ? 1 : 0;
+};
+
+const rasterizeMouthCoverage = (mood) => {
+  const coverageRows = [];
+  const { columns, rows, sampleColumnsPerCell, sampleRowsPerCell } = ASCII_MOUTH_GRID;
+  const totalSamples = sampleColumnsPerCell * sampleRowsPerCell;
+
+  for (let row = 0; row < rows; row += 1) {
+    const coverageRow = [];
+    for (let col = 0; col < columns; col += 1) {
+      let filled = 0;
+      for (let sr = 0; sr < sampleRowsPerCell; sr += 1) {
+        for (let sc = 0; sc < sampleColumnsPerCell; sc += 1) {
+          filled += evaluateMouthSampleCoverage(
+            mood,
+            col * sampleColumnsPerCell + sc,
+            row * sampleRowsPerCell + sr,
+          );
+        }
+      }
+      coverageRow.push(filled / totalSamples);
+    }
+    coverageRows.push(coverageRow);
+  }
+  return coverageRows;
+};
+
+const quantizeMouthCoverageToMask = (coverageRows) =>
+  coverageRows.map((row) => row.map((c) => c >= MOUTH_COVERAGE_THRESHOLD));
+
+const blendMouthCoverage = (fromCoverage, toCoverage, alpha) => {
+  const { rows, columns } = ASCII_MOUTH_GRID;
+  const result = [];
+  for (let r = 0; r < rows; r++) {
+    const row = [];
+    for (let c = 0; c < columns; c++) {
+      const from = fromCoverage?.[r]?.[c] ?? 0;
+      const to = toCoverage?.[r]?.[c] ?? 0;
+      row.push(lerp(from, to, alpha));
+    }
+    result.push(row);
+  }
+  return result;
+};
+
+const ensureMouthMotionState = (asciiState) => {
+  if (!asciiState || asciiState.layerType !== 'mouth') return null;
+  if (!asciiState.mouthMotion) {
+    const mood = MOUTH_FRAME_LIBRARY[asciiState.expressionFrame]?.mood ?? 'rest';
+    const coverage = rasterizeMouthCoverage(mood);
+    asciiState.mouthMotion = {
+      currentMood: mood,
+      fromCoverage: coverage,
+      toCoverage: coverage,
+      blendAlpha: 1,
+    };
+  }
+  return asciiState.mouthMotion;
+};
+
+const updateMouthMotionState = (asciiState, delta) => {
+  const motion = ensureMouthMotionState(asciiState);
+  if (!motion) return;
+  const frameIndex = getAsciiVisibleFrame(asciiState);
+  const targetMood = MOUTH_FRAME_LIBRARY[clampSpriteFrame(frameIndex, MOUTH_FRAME_LIBRARY.length)]?.mood ?? 'rest';
+
+  if (targetMood !== motion.currentMood) {
+    motion.fromCoverage = motion.blendAlpha >= 1
+      ? motion.toCoverage
+      : blendMouthCoverage(motion.fromCoverage, motion.toCoverage, motion.blendAlpha);
+    motion.toCoverage = rasterizeMouthCoverage(targetMood);
+    motion.currentMood = targetMood;
+    motion.blendAlpha = 0;
+  }
+
+  if (motion.blendAlpha < 1) {
+    motion.blendAlpha = Math.min(1, motion.blendAlpha + delta * 8);
+  }
+};
+
+const getCurrentMouthMask = (asciiState) => {
+  const motion = ensureMouthMotionState(asciiState);
+  if (!motion) {
+    const frameIndex = getAsciiVisibleFrame(asciiState);
+    const mood = MOUTH_FRAME_LIBRARY[clampSpriteFrame(frameIndex, MOUTH_FRAME_LIBRARY.length)]?.mood ?? 'rest';
+    return quantizeMouthCoverageToMask(rasterizeMouthCoverage(mood));
+  }
+  if (motion.blendAlpha >= 1) {
+    return quantizeMouthCoverageToMask(motion.toCoverage);
+  }
+  return quantizeMouthCoverageToMask(blendMouthCoverage(motion.fromCoverage, motion.toCoverage, motion.blendAlpha));
+};
+
+const createAsciiMouthMasks = (preset = {}) => {
+  const mood = preset.mood ?? 'rest';
+  const coverage = rasterizeMouthCoverage(mood);
+  const outlineMask = quantizeMouthCoverageToMask(coverage);
   const softMask = createEmptyAsciiMask(ASCII_MOUTH_GRID.rows, ASCII_MOUTH_GRID.columns);
   const highlightMask = createEmptyAsciiMask(ASCII_MOUTH_GRID.rows, ASCII_MOUTH_GRID.columns);
-  const isMumble = preset.viseme === 'mumble';
-  const isSmileLike = preset.viseme === 'smile' || preset.viseme === 'grin';
-  const jitterAmount = clampUnit((preset.jitter ?? 0) * (isMumble ? 2.2 : 1.8));
-  const chatterWave = isMumble
-    ? Math.sin(effectTime * 4.2) * 0.56 + Math.sin(effectTime * 6.4 + 0.8) * 0.44
-    : Math.sin(effectTime * 12.4) * 0.58 + Math.sin(effectTime * 24.6 + 0.8) * 0.42;
-  const widthPulse = isMumble ? Math.round(Math.sin(effectTime * 3.4 + 0.25) * jitterAmount * 0.9) : Math.round(chatterWave * jitterAmount * 1.25);
-  const openPulse = isMumble
-    ? Math.round((Math.sin(effectTime * 4.6 + 0.35) * 0.62 + Math.sin(effectTime * 2.7) * 0.38) * jitterAmount * 1.35)
-    : Math.round((Math.sin(effectTime * 10.8 + 0.35) * 0.55 + Math.sin(effectTime * 21.2) * 0.45) * jitterAmount * 1.7);
-  const centerX = Math.round((ASCII_MOUTH_GRID.columns - 1) * 0.5);
-  const centerY = Math.round((ASCII_MOUTH_GRID.rows - 1) * 0.5);
-  const halfWidth = THREE.MathUtils.clamp(Math.round(lerp(2, 6, clampUnit(preset.width ?? 0.6))) + widthPulse, 2, 7);
-  const openHeight = THREE.MathUtils.clamp(
-    Math.round(lerp(0, 5, clampUnit(preset.open ?? 0.1))) + openPulse,
-    isMumble ? 2 : 0,
-    isMumble ? 4 : 6,
-  );
-  const smileCurve = (preset.smile ?? 0) * 1.8;
-  const leftX = centerX - halfWidth;
-  const rightX = centerX + halfWidth;
-
-  if (isSmileLike) {
-    const smileDepth = preset.viseme === 'grin' ? 3 : 2;
-    const smileBaseY = centerY - (preset.viseme === 'grin' ? 2 : 1);
-    const smileHalfWidth = Math.max(3, halfWidth + 1);
-    const smileStartX = centerX - smileHalfWidth;
-    const smileEndX = centerX + smileHalfWidth;
-    let previousOuterPoint = null;
-    let previousInnerPoint = null;
-
-    for (let x = smileStartX; x <= smileEndX; x += 1) {
-      const normalizedX = THREE.MathUtils.clamp((x - centerX) / Math.max(1, smileHalfWidth), -1, 1);
-      const arc = (Math.cos(normalizedX * Math.PI) + 1) * 0.5;
-      const smileY = smileBaseY + Math.round(arc * smileDepth);
-
-      if (previousOuterPoint) {
-        drawAsciiMaskLine(outlineMask, previousOuterPoint.x, previousOuterPoint.y, x, smileY, 1);
-      } else {
-        setAsciiMaskCell(outlineMask, x, smileY);
-      }
-      previousOuterPoint = { x, y: smileY };
-
-      if (preset.viseme === 'grin' && arc > 0.18) {
-        const innerY = smileY - (arc > 0.72 ? 2 : 1);
-        if (previousInnerPoint) {
-          drawAsciiMaskLine(softMask, previousInnerPoint.x, previousInnerPoint.y, x, innerY, 1);
-        } else {
-          setAsciiMaskCell(softMask, x, innerY);
-        }
-        previousInnerPoint = { x, y: innerY };
-      } else {
-        previousInnerPoint = null;
-      }
-    }
-  } else if (preset.press) {
-    const pressY =
-      centerY +
-      Math.round(smileCurve * 0.4) +
-      (isMumble ? Math.round(chatterWave * jitterAmount * 0.6) : Math.round(chatterWave * jitterAmount * 1.2));
-    drawAsciiMaskLine(outlineMask, leftX, pressY, rightX, pressY, 1);
-    if ((preset.press ?? 0) > 0.15) {
-      drawAsciiMaskLine(softMask, leftX + 1, pressY + 1, rightX - 1, pressY + 1, 1);
-    }
-  } else if (preset.round) {
-    const radiusX = Math.max(2, Math.round(halfWidth * (0.58 + jitterAmount * 0.08)));
-    const radiusY = Math.max(1, openHeight + 1 + Math.round(jitterAmount * 0.75));
-    outlineAsciiMaskEllipse(outlineMask, centerX, centerY, radiusX, radiusY, 1);
-    if ((preset.open ?? 0) > 0.55) {
-      fillAsciiMaskEllipse(softMask, centerX, centerY, Math.max(1, radiusX - 2), Math.max(1, radiusY - 2));
-    }
-  } else {
-    let previousCurvePoint = null;
-    let previousTopPoint = null;
-    let previousBottomPoint = null;
-
-    for (let x = leftX; x <= rightX; x += 1) {
-      const normalizedX = halfWidth <= 0 ? 0 : (x - centerX) / halfWidth;
-      const arc = Math.max(0, 1 - Math.pow(Math.abs(normalizedX), 1.4));
-      const jitterWave = isMumble
-        ? Math.sin(effectTime * 5.1 + normalizedX * 2.4) * 0.56 + Math.sin(effectTime * 3.1 - normalizedX * 3.1 + 0.45) * 0.44
-        : Math.sin(effectTime * 16.2 + normalizedX * 5.8) * 0.6 + Math.sin(effectTime * 9.6 - normalizedX * 8.4 + 0.4) * 0.4;
-      const curveY =
-        centerY +
-        Math.round(smileCurve * arc) +
-        (isMumble ? Math.round(jitterWave * jitterAmount * 0.55) : Math.round(jitterWave * jitterAmount * 1.4));
-
-      if (openHeight <= 1) {
-        if (previousCurvePoint) {
-          drawAsciiMaskLine(outlineMask, previousCurvePoint.x, previousCurvePoint.y, x, curveY, 1);
-        } else {
-          setAsciiMaskCell(outlineMask, x, curveY);
-        }
-        previousCurvePoint = { x, y: curveY };
-        continue;
-      }
-
-      const topY = curveY - Math.max(0, Math.round(openHeight * 0.35 * arc));
-      const bottomY =
-        curveY +
-        Math.max(1, Math.round((openHeight * 0.4) + openHeight * 0.55 * arc)) +
-        (isMumble ? Math.round(jitterWave * jitterAmount * 0.2) : Math.round(jitterWave * jitterAmount * 0.8));
-      if (previousTopPoint) {
-        drawAsciiMaskLine(outlineMask, previousTopPoint.x, previousTopPoint.y, x, topY, 1);
-      } else {
-        setAsciiMaskCell(outlineMask, x, topY);
-      }
-      if (previousBottomPoint) {
-        drawAsciiMaskLine(outlineMask, previousBottomPoint.x, previousBottomPoint.y, x, bottomY, 1);
-      } else {
-        setAsciiMaskCell(outlineMask, x, bottomY);
-      }
-      previousTopPoint = { x, y: topY };
-      previousBottomPoint = { x, y: bottomY };
-
-      if (openHeight >= 2 && arc > 0.45) {
-        setAsciiMaskCell(softMask, x, bottomY - 1);
-      }
-    }
-  }
-
-  if (preset.stretch) {
-    drawAsciiMaskLine(outlineMask, leftX - 1, centerY + 1, leftX + 1, centerY, 1);
-    drawAsciiMaskLine(outlineMask, rightX - 1, centerY, rightX + 1, centerY + 1, 1);
-  }
-
-  if (preset.bite) {
-    fillAsciiMaskRect(highlightMask, centerX - 2, centerY - 1, 5, 1);
-    drawAsciiMaskLine(outlineMask, centerX - 3, centerY + 1, centerX + 3, centerY + 1, 1);
-  }
-
   return { outlineMask, softMask, highlightMask };
 };
 const getAsciiExpressionMouthRows = (preset = {}, effectTime = 0) => {
-  const { outlineMask, softMask, highlightMask } = createAsciiMouthMasks(preset, effectTime);
+  const { outlineMask, softMask, highlightMask } = createAsciiMouthMasks(preset);
   return trimAsciiRows(asciiMaskToRows(combineAsciiMasks(outlineMask, softMask, highlightMask)));
 };
 const createAsciiExpressionPreview = ({ eyeFrame = 0, mouthFrame = 0, eyePose = null, eyeMasks = null, effectTime = 0 } = {}) => {
   const resolvedEyePose = eyePose ? createEyePose(eyePose) : createEyePoseFromFrame(eyeFrame);
-  const resolvedEyeMasks = eyeMasks ?? getImportedEyeAssetForFrame(eyeFrame);
+  const resolvedEyeMasks = eyeMasks ?? null;
   const mouthPreset = MOUTH_FRAME_LIBRARY[clampSpriteFrame(mouthFrame, MOUTH_FRAME_LIBRARY.length)] ?? MOUTH_FRAME_LIBRARY[0];
   const mouthRows = getAsciiExpressionMouthRows(mouthPreset, effectTime);
 
@@ -1867,7 +1729,7 @@ const createFrameSummary = (asciiState, frameIndex) => {
     ].filter(Boolean).join('\n');
   }
 
-  return [preset.label, formatEffectSummary([preset.viseme, preset.round ? 'round' : '', preset.press ? 'press' : '', preset.bite ? 'bite' : ''])].filter(Boolean).join('\n');
+  return [preset.label, formatEffectSummary([preset.mood ?? ''])].filter(Boolean).join('\n');
 };
 const getLoopPhase = (time = 0, period = 2, phase = 0) => {
   const safePeriod = Math.max(0.001, period);
@@ -1886,20 +1748,38 @@ const getLoopBlinkClosure = (time = 0, { period = 2.8, phase = 0, closeDuration 
   }
   return 0;
 };
-const getMovingEyeShift = (time = 0, phase = 0) => {
-  const loop = getLoopPhase(time, 3.2, phase);
-  if (loop < 0.34) return -0.18;
-  if (loop < 0.43) return lerp(-0.18, 0.16, easeInOutSine((loop - 0.34) / 0.09));
-  if (loop < 0.96) return 0.16;
-  if (loop < 1.04) return lerp(0.16, -0.04, easeInOutSine((loop - 0.96) / 0.08));
-  if (loop < 1.42) return -0.04;
-  if (loop < 1.49) return lerp(-0.04, 0.22, easeInOutSine((loop - 1.42) / 0.07));
-  if (loop < 1.95) return 0.22;
-  if (loop < 2.03) return lerp(0.22, -0.12, easeInOutSine((loop - 1.95) / 0.08));
-  if (loop < 2.42) return -0.12;
-  if (loop < 2.52) return lerp(-0.12, 0.08, easeInOutSine((loop - 2.42) / 0.1));
-  if (loop < 2.88) return 0.08;
-  if (loop < 3.02) return lerp(0.08, 0, easeInOutSine((loop - 2.88) / 0.14));
+const getMovingEyeShiftX = (time = 0, phase = 0) => {
+  const loop = getLoopPhase(time, 4.0, phase);
+  if (loop < 0.40) return -0.22;
+  if (loop < 0.52) return lerp(-0.22, 0.20, easeInOutSine((loop - 0.40) / 0.12));
+  if (loop < 0.96) return 0.20;
+  if (loop < 1.08) return lerp(0.20, -0.04, easeInOutSine((loop - 0.96) / 0.12));
+  if (loop < 1.38) return -0.04;
+  if (loop < 1.48) return lerp(-0.04, 0.26, easeInOutSine((loop - 1.38) / 0.10));
+  if (loop < 1.92) return 0.26;
+  if (loop < 2.04) return lerp(0.26, -0.16, easeInOutSine((loop - 1.92) / 0.12));
+  if (loop < 2.46) return -0.16;
+  if (loop < 2.58) return lerp(-0.16, 0.10, easeInOutSine((loop - 2.46) / 0.12));
+  if (loop < 2.96) return 0.10;
+  if (loop < 3.10) return lerp(0.10, -0.24, easeInOutSine((loop - 2.96) / 0.14));
+  if (loop < 3.54) return -0.24;
+  if (loop < 3.70) return lerp(-0.24, 0, easeInOutSine((loop - 3.54) / 0.16));
+  return 0;
+};
+const getMovingEyeShiftY = (time = 0, phase = 0) => {
+  const loop = getLoopPhase(time, 4.0, phase + 0.7);
+  if (loop < 0.50) return -0.08;
+  if (loop < 0.62) return lerp(-0.08, 0.10, easeInOutSine((loop - 0.50) / 0.12));
+  if (loop < 1.10) return 0.10;
+  if (loop < 1.22) return lerp(0.10, -0.05, easeInOutSine((loop - 1.10) / 0.12));
+  if (loop < 1.80) return -0.05;
+  if (loop < 1.92) return lerp(-0.05, 0.12, easeInOutSine((loop - 1.80) / 0.12));
+  if (loop < 2.40) return 0.12;
+  if (loop < 2.54) return lerp(0.12, -0.08, easeInOutSine((loop - 2.40) / 0.14));
+  if (loop < 3.10) return -0.08;
+  if (loop < 3.26) return lerp(-0.08, 0.04, easeInOutSine((loop - 3.10) / 0.16));
+  if (loop < 3.70) return 0.04;
+  if (loop < 3.86) return lerp(0.04, 0, easeInOutSine((loop - 3.70) / 0.16));
   return 0;
 };
 const applyEyePresetMotion = (pose, preset = {}, time = 0) => {
@@ -1914,17 +1794,30 @@ const applyEyePresetMotion = (pose, preset = {}, time = 0) => {
     case 'loading':
       break;
     case 'moving':
-      pose.shiftX = getMovingEyeShift(time, phase);
-      pose.shiftY += Math.sin(time * 1.4 + phase) * 0.01;
+      pose.shiftX = getMovingEyeShiftX(time, phase);
+      pose.shiftY = getMovingEyeShiftY(time, phase);
       break;
-    case 'sleepy':
-      pose.open = clampUnit(pose.open - 0.03 + Math.sin(time * 0.8 + phase) * 0.025);
-      pose.shiftY += 0.03 + (Math.sin(time * 0.8 + phase + 0.6) * 0.5 + 0.5) * 0.02;
+    case 'die':
+      pose.scanlineGlitch = 0.5 + Math.abs(Math.sin(time * 2.6 + phase)) * 0.3;
+      break;
+    case 'sleepy': {
+      const wave = (Math.sin(time * 0.9 + phase) + 1) * 0.5;
+      const drowsy = clampUnit(Math.pow(wave, 0.4) * 1.15 - 0.1);
+      const awake = Math.pow(1 - clampUnit(drowsy), 2);
+      pose.open = lerp(0.08, 0.72, awake);
+      pose.height = lerp(0.3, 1.8, awake);
+      pose.capsuleBlend = lerp(0, 1, awake);
+      pose.curve = lerp(1.08, 0.86, awake);
+      pose.flatness = lerp(0.74, 0.44, awake);
+      pose.squeeze = lerp(0.34, 0.01, awake);
+      const nodY = drowsy * 0.06 + (drowsy > 0.8 ? 0.03 : 0);
+      pose.shiftY += nodY;
       pose.blinkClosure = Math.max(
         clampUnit(pose.blinkClosure ?? 0),
-        getLoopBlinkClosure(time, { period: 3.6, phase, closeDuration: 0.12, holdDuration: 0.28, openDuration: 0.12 }),
+        clampUnit(drowsy),
       );
       break;
+    }
     default:
       break;
   }
@@ -1956,6 +1849,9 @@ const getAsciiReviewFrames = (asciiState) => {
   if (!asciiState) return [];
   if (asciiState.layerType === 'eyes') {
     return Array.from({ length: Math.min(asciiState.frameCount, EYE_FRAME_LIBRARY.length) }, (_, index) => index);
+  }
+  if (asciiState.layerType === 'mouth') {
+    return Array.from({ length: Math.min(asciiState.frameCount, MOUTH_FRAME_LIBRARY.length) }, (_, index) => index);
   }
   return getAsciiFramesForRow(asciiState, asciiState.playbackRow);
 };
@@ -2012,17 +1908,7 @@ const getCurrentEyePose = (asciiState, frameIndex = getAsciiVisibleFrame(asciiSt
   return pose;
 };
 const getCurrentEyeMasks = (asciiState, frameIndex = getAsciiVisibleFrame(asciiState)) => {
-  const preset = getEyePreset(frameIndex);
   const motion = ensureEyeMotionState(asciiState);
-  const blinkImportedAsset = asciiImportedEyeAssets.get('Blink') ?? null;
-  if (asciiState?.isBlinking && (motion?.blinkClosure ?? 0) >= 0.9 && blinkImportedAsset) {
-    return blinkImportedAsset;
-  }
-  const importedAsset = getImportedEyeAssetForFrame(frameIndex);
-  if (importedAsset) return importedAsset;
-  if (preset.label === 'Loading') {
-    return createLoadingEyeAsset(motion?.masks ?? null, asciiState?.effectTime ?? 0);
-  }
   return motion?.masks ?? null;
 };
 const updateEyeMotionState = (asciiState, delta, now = performance.now() * 0.001) => {
@@ -2073,15 +1959,18 @@ const updateEyeMotionState = (asciiState, delta, now = performance.now() * 0.001
   motion.currentPose.blinkClosure = motion.blinkClosure;
   applyEyePresetMotion(motion.currentPose, preset, asciiState.effectTime ?? 0);
   motion.currentPose.blinkClosure = Math.max(clampUnit(motion.currentPose.blinkClosure ?? 0), motion.blinkClosure);
+
+  const rasterPose = { ...motion.currentPose, shiftX: 0, shiftY: 0 };
+  const skipHysteresis = (rasterPose.scanlineGlitch ?? 0) > 0;
   motion.masks.left = quantizeEyeCoverageRows(
-    rasterizeEyePoseToCoverage(motion.currentPose, 'left', motion.currentPose.time ?? 0),
-    motion.masks.left,
+    rasterizeEyePoseToCoverage(rasterPose, 'left', rasterPose.time ?? 0),
+    skipHysteresis ? null : motion.masks.left,
   );
   motion.masks.right = shouldDuplicateMasks
     ? cloneEyeMask(motion.masks.left)
     : quantizeEyeCoverageRows(
-        rasterizeEyePoseToCoverage(motion.currentPose, 'right', motion.currentPose.time ?? 0),
-        motion.masks.right,
+        rasterizeEyePoseToCoverage(rasterPose, 'right', rasterPose.time ?? 0),
+        skipHysteresis ? null : motion.masks.right,
       );
 };
 
@@ -2096,70 +1985,12 @@ const renderEyePixels = (context, asciiState, pose, side, mask = null, highlight
   const gridHeight = ASCII_EXPRESSION_EYE_TOTAL_HEIGHT * cellHeight;
   const startX = Math.round((context.canvas.width - gridWidth) * 0.5);
   const startY = Math.round((context.canvas.height - gridHeight) * 0.5);
-  const isDiePreset = preset?.label === 'Die';
-
-  if (isDiePreset) {
-    const dieBounds = getEyeMaskBounds(eyeMask);
-    if (dieBounds) {
-      eyeMask.forEach((row, rowIndex) => {
-        row.forEach((isFilled, columnIndex) => {
-          if (!isFilled) return;
-
-          const normalizedX = (columnIndex - dieBounds.minColumn) / dieBounds.width;
-          const normalizedNextX = (columnIndex - dieBounds.minColumn + 1) / dieBounds.width;
-          const normalizedY = (rowIndex - dieBounds.minRow) / dieBounds.height;
-          const normalizedNextY = (rowIndex - dieBounds.minRow + 1) / dieBounds.height;
-          const blockX = Math.round(normalizedX * context.canvas.width);
-          const blockY = Math.round(normalizedY * context.canvas.height);
-          const blockWidth = Math.max(1, Math.round(normalizedNextX * context.canvas.width) - blockX);
-          const blockHeight = Math.max(1, Math.round(normalizedNextY * context.canvas.height) - blockY);
-
-          plotBlock(context, blockX, blockY, blockWidth, blockHeight, ink);
-        });
-      });
-
-      return {
-        sourceX: 0,
-        sourceY: 0,
-        sourceWidth: context.canvas.width,
-        sourceHeight: context.canvas.height,
-      };
-    }
-  }
-
-  if (preset?.label === 'Loading') {
-    const loadingOrientationSide = isEyePresetAsymmetric(preset) ? side : 'left';
-    const baseMask = eyeMask;
-    const loadingStroke = getLoadingStrokeCells(baseMask, asciiState.effectTime ?? 0, loadingOrientationSide);
-    loadingStroke.trail.forEach((cell) => {
-      if (
-        !shouldRenderLoadingTrailCell(
-          cell,
-          getLoadingTrailVariant(cell, cell.alpha, asciiState.effectTime ?? 0, loadingOrientationSide),
-          asciiState.effectTime ?? 0,
-          loadingOrientationSide,
-        )
-      ) {
-        return;
-      }
-      plotBlock(
-        context,
-        startX + cell.columnIndex * cellWidth,
-        startY + cell.rowIndex * cellHeight,
-        cellWidth,
-        cellHeight,
-        ink,
-        1,
-      );
+  eyeMask.forEach((row, rowIndex) => {
+    row.forEach((isFilled, columnIndex) => {
+      if (!isFilled) return;
+      plotBlock(context, startX + columnIndex * cellWidth, startY + rowIndex * cellHeight, cellWidth, cellHeight, ink);
     });
-  } else {
-    eyeMask.forEach((row, rowIndex) => {
-      row.forEach((isFilled, columnIndex) => {
-        if (!isFilled) return;
-        plotBlock(context, startX + columnIndex * cellWidth, startY + rowIndex * cellHeight, cellWidth, cellHeight, ink);
-      });
-    });
-  }
+  });
 
   renderAnimatedEyeHighlight(context, asciiState, eyeMask, highlightMask, startX, startY, cellWidth, cellHeight, {
     preset,
@@ -2179,45 +2010,26 @@ const renderMouthPixels = (context, asciiState, preset) => {
   clearLogicalCanvas(context);
 
   const ink = asciiState.foregroundColor;
-  const softInk = asciiState.softColor;
-  const highlight = asciiState.highlightColor;
-  const { outlineMask, softMask, highlightMask } = createAsciiMouthMasks(preset, asciiState.effectTime ?? 0);
+  const mask = getCurrentMouthMask(asciiState);
   const cellWidth = ASCII_MOUTH_GRID.renderCellWidth;
   const cellHeight = ASCII_MOUTH_GRID.renderCellHeight;
   const gridWidth = ASCII_MOUTH_GRID.columns * cellWidth;
   const gridHeight = ASCII_MOUTH_GRID.rows * cellHeight;
   const startX = Math.round((context.canvas.width - gridWidth) * 0.5);
   const startY = Math.round((context.canvas.height - gridHeight) * 0.5);
-  const renderMask = (mask, color, alpha = 1) => {
-    mask.forEach((row, rowIndex) => {
-      row.forEach((isFilled, columnIndex) => {
-        if (!isFilled) return;
-        plotBlock(
-          context,
-          startX + columnIndex * cellWidth,
-          startY + rowIndex * cellHeight,
-          cellWidth,
-          cellHeight,
-          color,
-          alpha,
-        );
-      });
+
+  mask.forEach((row, rowIndex) => {
+    row.forEach((isFilled, columnIndex) => {
+      if (!isFilled) return;
+      plotBlock(context, startX + columnIndex * cellWidth, startY + rowIndex * cellHeight, cellWidth, cellHeight, ink);
     });
-  };
-
-  renderMask(outlineMask, ink, 1);
-  renderMask(softMask, ink, 1);
-  renderMask(highlightMask, highlight, 1);
-
-  const rawBounds = getAsciiMaskBounds(combineAsciiMasks(outlineMask, softMask, highlightMask));
-  const activeBounds = padAsciiMaskBounds(rawBounds, ASCII_MOUTH_GRID.columns, ASCII_MOUTH_GRID.rows, 1, 1);
-  if (!activeBounds) return null;
+  });
 
   return {
-    sourceX: startX + activeBounds.minX * cellWidth,
-    sourceY: startY + activeBounds.minY * cellHeight,
-    sourceWidth: Math.max(cellWidth, activeBounds.width * cellWidth),
-    sourceHeight: Math.max(cellHeight, activeBounds.height * cellHeight),
+    sourceX: startX,
+    sourceY: startY,
+    sourceWidth: gridWidth,
+    sourceHeight: gridHeight,
   };
 };
 
@@ -2407,10 +2219,11 @@ const renderAsciiFrameToTexture = (asciiState, frameIndex = getAsciiVisibleFrame
   if (asciiState.layerType === 'eyes') {
     const eyePose = getCurrentEyePose(asciiState, nextFrame);
     const eyeMasks = getCurrentEyeMasks(asciiState, nextFrame);
+    const renderPose = { ...eyePose, shiftX: 0, shiftY: 0 };
     const leftFrameBounds = renderEyePixels(
       asciiState.eyeContexts.left,
       asciiState,
-      eyePose,
+      renderPose,
       'left',
       eyeMasks?.left ?? null,
       eyeMasks?.leftHighlight ?? null,
@@ -2419,7 +2232,7 @@ const renderAsciiFrameToTexture = (asciiState, frameIndex = getAsciiVisibleFrame
     const rightFrameBounds = renderEyePixels(
       asciiState.eyeContexts.right,
       asciiState,
-      eyePose,
+      renderPose,
       'right',
       eyeMasks?.right ?? null,
       eyeMasks?.rightHighlight ?? null,
@@ -2428,6 +2241,10 @@ const renderAsciiFrameToTexture = (asciiState, frameIndex = getAsciiVisibleFrame
 
     const leftBox = ASCII_EYE_BOXES.left;
     const rightBox = ASCII_EYE_BOXES.right;
+    const gazeOffsetX = Math.round((eyePose.shiftX ?? 0) * leftBox.width * 2.4);
+    const gazeOffsetY = Math.round((eyePose.shiftY ?? 0) * leftBox.height * 2.0);
+    sharedGaze.x = gazeOffsetX;
+    sharedGaze.y = gazeOffsetY;
 
     if (leftFrameBounds) {
       const fitScale = Math.min(
@@ -2436,8 +2253,8 @@ const renderAsciiFrameToTexture = (asciiState, frameIndex = getAsciiVisibleFrame
       );
       const destWidth = Math.max(1, Math.round(leftFrameBounds.sourceWidth * fitScale));
       const destHeight = Math.max(1, Math.round(leftFrameBounds.sourceHeight * fitScale));
-      const destX = leftBox.x + Math.round((leftBox.width - destWidth) * 0.5);
-      const destY = leftBox.y + Math.round((leftBox.height - destHeight) * 0.5);
+      const destX = leftBox.x + Math.round((leftBox.width - destWidth) * 0.5) + gazeOffsetX;
+      const destY = leftBox.y + Math.round((leftBox.height - destHeight) * 0.5) + gazeOffsetY;
 
       context.drawImage(
         asciiState.eyeCanvases.left,
@@ -2459,8 +2276,8 @@ const renderAsciiFrameToTexture = (asciiState, frameIndex = getAsciiVisibleFrame
       );
       const destWidth = Math.max(1, Math.round(rightFrameBounds.sourceWidth * fitScale));
       const destHeight = Math.max(1, Math.round(rightFrameBounds.sourceHeight * fitScale));
-      const destX = rightBox.x + Math.round((rightBox.width - destWidth) * 0.5);
-      const destY = rightBox.y + Math.round((rightBox.height - destHeight) * 0.5);
+      const destX = rightBox.x + Math.round((rightBox.width - destWidth) * 0.5) + gazeOffsetX;
+      const destY = rightBox.y + Math.round((rightBox.height - destHeight) * 0.5) + gazeOffsetY;
 
       context.drawImage(
         asciiState.eyeCanvases.right,
@@ -2485,8 +2302,10 @@ const renderAsciiFrameToTexture = (asciiState, frameIndex = getAsciiVisibleFrame
       );
       const destWidth = Math.max(1, Math.round(mouthFrameBounds.sourceWidth * fitScale));
       const destHeight = Math.max(1, Math.round(mouthFrameBounds.sourceHeight * fitScale));
-      const destX = mouthBox.x + Math.round((mouthBox.width - destWidth) * 0.5);
-      const destY = mouthBox.y + Math.round((mouthBox.height - destHeight) * 0.5);
+      const mouthGazeX = Math.round(sharedGaze.x * 0.5);
+      const mouthGazeY = Math.round(sharedGaze.y * 0.5);
+      const destX = mouthBox.x + Math.round((mouthBox.width - destWidth) * 0.5) + mouthGazeX;
+      const destY = mouthBox.y + Math.round((mouthBox.height - destHeight) * 0.5) + mouthGazeY;
 
       context.drawImage(
         asciiState.mouthCanvas,
@@ -2537,7 +2356,7 @@ const createAsciiState = (material, sourceTexture, initialState = {}) => {
     rows: ASCII_FRAME_LAYOUT.rows,
     gridColumns: ASCII_TEXTURE_RENDER.gridColumns,
     gridRows: ASCII_TEXTURE_RENDER.gridRows,
-    frameCount: initialState.frameCount ?? ASCII_FRAME_LAYOUT.frameCount,
+    frameCount: initialState.frameCount ?? (layerType === 'eyes' ? EYE_FRAME_LIBRARY.length : MOUTH_FRAME_LIBRARY.length),
     expressionFrame: initialState.expressionFrame ?? 0,
     blinkFrame: initialState.blinkFrame ?? 4,
     activeFrame: 0,
@@ -2566,7 +2385,7 @@ const createAsciiState = (material, sourceTexture, initialState = {}) => {
     eyeContexts: { left: eyeLeftContext, right: eyeRightContext },
     mouthCanvas,
     mouthContext,
-    frames: Array.from({ length: ASCII_FRAME_LAYOUT.frameCount }, (_, index) => createFrameSummary({ layerType }, index)),
+    frames: Array.from({ length: layerType === 'eyes' ? EYE_FRAME_LIBRARY.length : MOUTH_FRAME_LIBRARY.length }, (_, index) => createFrameSummary({ layerType }, index)),
     currentFrameText: '',
     eyeMotion:
       layerType === 'eyes'
@@ -2589,7 +2408,7 @@ const createAsciiState = (material, sourceTexture, initialState = {}) => {
   mouthContext.imageSmoothingEnabled = false;
   normalizeAsciiState(asciiState);
   if (layerType === 'eyes') {
-    ensureImportedEyeAssetsLoaded();
+    // SVG imports removed — all expressions use coverage functions
   }
   scheduleNextBlink(asciiState);
   if (layerType === 'eyes') {
@@ -2856,6 +2675,8 @@ const stepAsciiAnimations = (delta, now = performance.now() * 0.001) => {
 
     if (asciiState.layerType === 'eyes') {
       updateEyeMotionState(asciiState, delta, now);
+    } else if (asciiState.layerType === 'mouth') {
+      updateMouthMotionState(asciiState, delta);
     }
 
     renderAsciiFrameToTexture(asciiState);
@@ -3467,8 +3288,8 @@ const renderTextureInspector = (root) => {
           panelSub.className = 'sprite-sub';
           panelSub.textContent =
             asciiState.layerType === 'eyes'
-              ? 'Generated live from a continuous 20 x 30 eye rig and merged into the current ASCII expression.'
-              : 'Generated live from the mouth viseme library and merged into the current ASCII expression.';
+              ? 'Select an eye expression to preview on the model.'
+              : 'Select a mouth expression to preview on the model.';
 
           const fields = document.createElement('div');
           fields.className = 'sprite-grid';
@@ -3495,7 +3316,11 @@ const renderTextureInspector = (root) => {
           });
           const fpsField = createNumberField({ label: 'FPS', value: asciiState.fps, min: 1, max: 60, step: 0.5 });
 
-          fields.append(framesField.field, expressionField.field, playbackRowField.field, blinkField.field, fpsField.field);
+          if (asciiState.layerType === 'eyes') {
+            fields.append(expressionField.field, blinkField.field);
+          } else {
+            fields.append(expressionField.field);
+          }
 
           const asciiPreview = document.createElement('pre');
           asciiPreview.className = 'ascii-preview';
@@ -3546,10 +3371,8 @@ const renderTextureInspector = (root) => {
           frameState.className = 'texture-state';
 
           const reviewCards = [];
-          const reviewCardCount = asciiState.layerType === 'eyes' ? EYE_FRAME_LIBRARY.length : asciiState.columns;
-          if (asciiState.layerType === 'eyes') {
-            reviewGrid.style.gridTemplateColumns = 'repeat(4, minmax(0, 1fr))';
-          }
+          const reviewCardCount = asciiState.layerType === 'eyes' ? EYE_FRAME_LIBRARY.length : MOUTH_FRAME_LIBRARY.length;
+          reviewGrid.style.gridTemplateColumns = asciiState.layerType === 'eyes' ? 'repeat(4, minmax(0, 1fr))' : 'repeat(3, minmax(0, 1fr))';
           for (let slotIndex = 0; slotIndex < reviewCardCount; slotIndex += 1) {
             const card = document.createElement('button');
             card.className = 'ascii-review-card';
@@ -3561,12 +3384,9 @@ const renderTextureInspector = (root) => {
             const cardMeta = document.createElement('div');
             cardMeta.className = 'ascii-review-card-meta';
 
-            const cardPreview = document.createElement('pre');
-            cardPreview.className = 'ascii-review-card-pre';
-
-            card.append(cardTitle, cardMeta, cardPreview);
+            card.append(cardTitle);
             reviewGrid.append(card);
-            reviewCards.push({ card, cardTitle, cardMeta, cardPreview });
+            reviewCards.push({ card, cardTitle, cardMeta });
           }
 
           const updateAsciiReviewMotion = () => {
@@ -3588,10 +3408,6 @@ const renderTextureInspector = (root) => {
               const frame = reviewFrames[slotIndex];
               if (frame === undefined) return;
               entry.card.classList.toggle('is-active', asciiState.expressionFrame === frame);
-              entry.cardPreview.textContent =
-                asciiState.layerType === 'eyes'
-                  ? createAsciiEyePreviewText(frame, asciiState.effectTime ?? 0)
-                  : createAsciiMouthPreviewText(frame, asciiState.effectTime ?? 0);
             });
           };
 
@@ -3633,12 +3449,8 @@ const renderTextureInspector = (root) => {
                   ? `All · Frame ${getAsciiVisibleFrame(asciiState) + 1} / ${asciiState.frameCount}`
                   : `Row ${asciiState.playbackRow + 1} · Frame ${getAsciiVisibleFrame(asciiState) + 1} / ${asciiState.frameCount}`;
             const reviewFrames = getAsciiReviewFrames(asciiState);
-            reviewLabel.textContent =
-              asciiState.layerType === 'eyes' ? 'Eye States' : getAsciiReviewRowLabel(asciiState, asciiState.playbackRow);
-            reviewSub.textContent =
-              asciiState.layerType === 'eyes'
-                ? 'Click any state button to lock that eye shape and watch its live motion on the model.'
-                : `Click a frame to lock it for review. Row ${asciiState.playbackRow + 1} · ${reviewFrames.length} poses`;
+            reviewLabel.textContent = asciiState.layerType === 'eyes' ? 'Eye States' : 'Mouth States';
+            reviewSub.textContent = `${reviewFrames.length} expressions`;
 
             reviewCards.forEach((entry, slotIndex) => {
               const frame = reviewFrames[slotIndex];
@@ -3652,12 +3464,7 @@ const renderTextureInspector = (root) => {
               entry.card.hidden = false;
               entry.card.disabled = false;
               entry.cardTitle.textContent = preset.label;
-              entry.cardMeta.textContent =
-                asciiState.layerType === 'eyes'
-                  ? ['twinkle', 'loading', 'moving', 'sleepy'].includes(preset.mood)
-                    ? 'Live motion'
-                    : 'Static state'
-                  : `Frame ${frame + 1}`;
+              entry.cardMeta.textContent = '';
             });
             updateAsciiReviewMotion();
             refreshTextureMeta();
@@ -3759,10 +3566,12 @@ const renderTextureInspector = (root) => {
             );
           });
 
-	          spriteControls.append(blinkToggle, playBtn, playAllBtn, frameState);
-	          asciiPanel.append(panelTitle, panelSub, fields, asciiPreview);
-	          asciiPanel.append(reviewStrip);
-	          asciiPanel.append(spriteControls);
+	          if (asciiState.layerType === 'eyes') {
+	            spriteControls.append(blinkToggle, playAllBtn, frameState);
+	          } else {
+	            spriteControls.append(playAllBtn, frameState);
+	          }
+	          asciiPanel.append(panelTitle, panelSub, reviewStrip, spriteControls);
 	          body.append(asciiPanel);
           refreshAsciiPanel();
         } else if (spriteState) {

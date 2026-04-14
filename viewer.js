@@ -9,9 +9,9 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
 
-const CHARACTER_ASSET_PATH = './assets/260408_daymo_motion.glb';
-const CHARACTER_ASSET_LABEL = 'assets/260408_daymo_motion.glb';
-const CHARACTER_ASSET_VERSION = '20260408-workbench-1';
+const CHARACTER_ASSET_PATH = './assets/260414_daymo_motion.glb';
+const CHARACTER_ASSET_LABEL = 'assets/260414_daymo_motion.glb';
+const CHARACTER_ASSET_VERSION = '20260414-workbench-1';
 const buildCharacterAssetUrl = ({ bustCache = false } = {}) =>
   `${CHARACTER_ASSET_PATH}?v=${bustCache ? `${CHARACTER_ASSET_VERSION}-${Date.now()}` : CHARACTER_ASSET_VERSION}`;
 const DEFAULT_FLAT_BACKGROUND = '#0b0d10';
@@ -639,13 +639,13 @@ const MOUTH_FRAME_LIBRARY = Object.freeze([
 ]);
 
 const STATE_PRESETS = Object.freeze([
-  { label: 'idle', eye: 0, mouth: 0, blink: true, motion: 'idle' },
-  { label: 'thinking', eye: 4, mouth: 0, blink: false, motion: 'thinking' },
-  { label: 'done', eye: 6, mouth: 1, blink: false, motion: 'jump' },
-  { label: 'searching', eye: 3, mouth: 2, blink: false, motion: 'searching' },
-  { label: 'error', eye: 5, mouth: 4, blink: false, motion: 'waving' },
-  { label: 'offline', eye: 7, mouth: 0, blink: false, motion: 'death' },
-  { label: 'talking', eye: 0, mouth: 3, blink: true, motion: 'talking' },
+  { label: 'idle', eye: 0, mouth: 1, blink: true, motion: 'idle' },
+  { label: 'thinking', eye: 4, mouth: 0, blink: false, motion: 'looking behind' },
+  { label: 'done', eye: 0, mouth: 1, blink: true, motion: 'jump', mouthCycle: [1, 3, 1, 1, 3, 1], eyeCycle: [0, 0, 6, 0, 0] },
+  { label: 'searching', eye: 3, mouth: 0, blink: false, motion: 'searching files' },
+  { label: 'error', eye: 5, mouth: 0, blink: false, motion: 'waving', mouthCycle: [0, 0, 4, 0, 0, 0, 4, 0] },
+  { label: 'offline', eye: 7, mouth: 0, blink: false, motion: 'standing react death' },
+  { label: 'talking', eye: 0, mouth: 3, blink: true, motion: 'talking', mouthCycle: [0, 3, 0, 2, 0, 5, 0, 3] },
 ]);
 
 const findAnimationIndex = (keyword) => {
@@ -1687,8 +1687,15 @@ const updateMouthMotionState = (asciiState, delta) => {
   }
 
   if (motion.blendAlpha < 1) {
-    motion.blendAlpha = Math.min(1, motion.blendAlpha + delta * 8);
+    const cyclePreset = activeStatePreset >= 0 ? STATE_PRESETS[activeStatePreset] : null;
+    const blendSpeed = cyclePreset?.mouthCycle
+      ? (cyclePreset.label === 'talking' ? 5 : 2.2)
+      : 8;
+    motion.blendAlpha = Math.min(1, motion.blendAlpha + delta * blendSpeed);
   }
+  motion.blendEased = motion.blendAlpha < 1
+    ? motion.blendAlpha * motion.blendAlpha * (3 - 2 * motion.blendAlpha)
+    : 1;
 };
 
 const getCurrentMouthMask = (asciiState) => {
@@ -1698,10 +1705,11 @@ const getCurrentMouthMask = (asciiState) => {
     const mood = MOUTH_FRAME_LIBRARY[clampSpriteFrame(frameIndex, MOUTH_FRAME_LIBRARY.length)]?.mood ?? 'rest';
     return quantizeMouthCoverageToMask(rasterizeMouthCoverage(mood));
   }
-  if (motion.blendAlpha >= 1) {
+  const t = motion.blendEased ?? motion.blendAlpha;
+  if (t >= 1) {
     return quantizeMouthCoverageToMask(motion.toCoverage);
   }
-  return quantizeMouthCoverageToMask(blendMouthCoverage(motion.fromCoverage, motion.toCoverage, motion.blendAlpha));
+  return quantizeMouthCoverageToMask(blendMouthCoverage(motion.fromCoverage, motion.toCoverage, t));
 };
 
 const createAsciiMouthMasks = (preset = {}) => {
@@ -2151,20 +2159,44 @@ const updateAsciiExpressionOverlay = () => {
 };
 
 let activeStatePreset = -1;
-const TALKING_MOUTH_FRAMES = [0, 3, 2, 0, 5, 3, 0, 2];
-let talkingAccumulator = 0;
-let talkingSegmentIndex = 0;
+let mouthCycleTime = 0;
+let mouthCycleIndex = 0;
+let mouthCycleNextSwitch = 0;
+let eyeCycleTime = 0;
+let eyeCycleIndex = 0;
+let eyeCycleNextSwitch = 0;
 
-const updateTalkingMouth = (mouth, delta) => {
-  if (activeStatePreset < 0 || STATE_PRESETS[activeStatePreset]?.label !== 'talking') return;
+const MOUTH_CYCLE_SPEEDS = { idle: 1.2, done: 0.6, error: 1.0, talking: 0.22 };
+const EYE_CYCLE_SPEEDS = { done: 1.0 };
+
+const updateMouthCycle = (mouth, delta) => {
+  if (activeStatePreset < 0) return;
+  const preset = STATE_PRESETS[activeStatePreset];
+  if (!preset?.mouthCycle) return;
   if (!mouth) return;
-  talkingAccumulator += delta;
-  const speed = 0.12 + Math.sin(talkingAccumulator * 1.7) * 0.04;
-  if (talkingAccumulator >= speed) {
-    talkingAccumulator = 0;
-    talkingSegmentIndex = (talkingSegmentIndex + 1) % TALKING_MOUTH_FRAMES.length;
-    mouth.expressionFrame = TALKING_MOUTH_FRAMES[talkingSegmentIndex];
-  }
+  mouthCycleTime += delta;
+  const motion = mouth.mouthMotion;
+  if (mouthCycleTime < mouthCycleNextSwitch) return;
+  if (motion && motion.blendAlpha < 1) return;
+  const baseInterval = MOUTH_CYCLE_SPEEDS[preset.label] ?? 0.5;
+  const interval = baseInterval + Math.sin(mouthCycleTime * 1.4) * (baseInterval * 0.3);
+  mouthCycleNextSwitch = mouthCycleTime + interval;
+  mouthCycleIndex = (mouthCycleIndex + 1) % preset.mouthCycle.length;
+  mouth.expressionFrame = preset.mouthCycle[mouthCycleIndex];
+};
+
+const updateEyeCycle = (eyes, delta) => {
+  if (activeStatePreset < 0) return;
+  const preset = STATE_PRESETS[activeStatePreset];
+  if (!preset?.eyeCycle) return;
+  if (!eyes) return;
+  eyeCycleTime += delta;
+  if (eyeCycleTime < eyeCycleNextSwitch) return;
+  const baseInterval = EYE_CYCLE_SPEEDS[preset.label] ?? 1.0;
+  const interval = baseInterval + Math.sin(eyeCycleTime * 0.9) * (baseInterval * 0.25);
+  eyeCycleNextSwitch = eyeCycleTime + interval;
+  eyeCycleIndex = (eyeCycleIndex + 1) % preset.eyeCycle.length;
+  eyes.expressionFrame = preset.eyeCycle[eyeCycleIndex];
 };
 const applyStatePreset = (presetIndex) => {
   const preset = STATE_PRESETS[presetIndex];
@@ -2195,6 +2227,12 @@ const applyStatePreset = (presetIndex) => {
       setActiveAnimation(clipIndex);
     }
   }
+  mouthCycleTime = 0;
+  mouthCycleIndex = 0;
+  mouthCycleNextSwitch = 0;
+  eyeCycleTime = 0;
+  eyeCycleIndex = 0;
+  eyeCycleNextSwitch = 0;
   activeStatePreset = presetIndex;
   updateStatePresetButtons();
   setStatus(`State: ${preset.label}`);
@@ -2764,9 +2802,10 @@ const stepAsciiAnimations = (delta, now = performance.now() * 0.001) => {
     }
 
     if (asciiState.layerType === 'eyes') {
+      updateEyeCycle(asciiState, delta);
       updateEyeMotionState(asciiState, delta, now);
     } else if (asciiState.layerType === 'mouth') {
-      updateTalkingMouth(asciiState, delta);
+      updateMouthCycle(asciiState, delta);
       updateMouthMotionState(asciiState, delta);
     }
 

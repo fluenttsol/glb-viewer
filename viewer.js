@@ -642,7 +642,7 @@ const STATE_PRESETS = Object.freeze([
   { label: 'idle', eye: 0, mouth: 1, blink: true, motion: 'idle' },
   { label: 'thinking', eye: 4, mouth: 0, blink: false, motion: 'looking behind' },
   { label: 'done', eye: 0, mouth: 1, blink: true, motion: 'jump', mouthCycle: [1, 3, 1, 1, 3, 1], eyeCycle: [0, 0, 6, 0, 0] },
-  { label: 'searching', eye: 3, mouth: 0, blink: false, motion: 'searching files' },
+  { label: 'searching', eye: 2, mouth: 0, blink: false, motion: 'searching files' },
   { label: 'error', eye: 5, mouth: 0, blink: false, motion: 'waving', mouthCycle: [0, 0, 4, 0, 0, 0, 4, 0] },
   { label: 'offline', eye: 7, mouth: 0, blink: false, motion: 'standing react death' },
   { label: 'talking', eye: 0, mouth: 3, blink: true, motion: 'talking', mouthCycle: [0, 3, 0, 2, 0, 5, 0, 3] },
